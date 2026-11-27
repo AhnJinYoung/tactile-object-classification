@@ -4,6 +4,7 @@ absl-py==2.5.1
 antlr4-python3-runtime==4.9.3
 contourpy==1.4.0
 cycler==0.12.1
+etils==1.15.0
 filelock==4.2.4
 fonttools==4.69.1
 fsspec==2026.9.0
@@ -23,6 +24,7 @@ mujoco==4.0.1
 mujoco-core==4.0.1
 mujoco-studio==4.0.1
 mujoco-studio-wasm==4.0.1
+mujoco-warp==4.0.1
 networkx==3.7
 numpy==2.5.5
 omegaconf==2.3.1
@@ -43,5 +45,7 @@ tensorboard-data-server==0.7.2
 torch==2.15.0+cpu
 typing-extensions==4.16.0
 tzdata==2026.6
+warp-lang==1.19.0
 websockets==17.4
 werkzeug==3.1.9
+zipp==4.1.2

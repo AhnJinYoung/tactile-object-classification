@@ -38,6 +38,7 @@ _Updated after every change or finished experiment. Last update: 2026-11-27._
 | Trainer | Staged training (contrastive, then confidence, then PPO on the encoder, then PPO on the policy) with intermediate videos and curves, optional Weights & Biases | environment, networks |
 | Launcher | `scripts/launch.py` fills all GPUs with queued runs | trainer |
 | Report | One page collecting every run: comment, rollout video, metric curves | trainer |
+| Live viewer | Browser view of a simulation running on the GPU server (through an SSH tunnel): pick a world, pause / step / reset, drive the hand, see contacts and confidence | environment |
 | GPU smoke test | Every stage for a few iterations; measure throughput and memory | GPU access and approval |
 | Baseline E001 | Staged training, tactile-point-cloud matcher, 1-D CNN encoder, H = 30, contact-ratio label | smoke test |
 | Experiment axes | Matcher input (points / latent / latent header), training scheme, encoder type, H, label type, network scale | baseline |
