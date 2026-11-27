@@ -1,0 +1,116 @@
+# MuJoCo bin-picking scene: UR10e + Sharpa Wave right hand reaching blind into an open-top bin (tacfind/envs/).
+# Frames: "base" = robot base frame = world (z up, m); "tip" = fingertip pad frame (pad centre, distal-phalanx axes).
+
+assets: third_party            # fetched by scripts/fetch_assets.py, relative to the repository root
+
+# --- simulation backend (nothing here depends on a particular GPU model) -----------------------------------------
+sim: warp                      # warp: MuJoCo Warp, all worlds batched on the env device (experiments) | cpu: reference
+nconmax: 96                    # contacts allocated per world, pooled over all worlds (warp only; CPU runs peak at 50)
+njmax: 500                     # constraint rows allocated per world, a hard cap (warp only; CPU runs peak at 250)
+n_threads: 8                   # worker threads of the cpu backend
+bank_size: 1024                # settled bin states built at construction; resets copy a random one
+settle_time: 1.0               # objects fall and come to rest while the bank is built, s
+
+# --- timing ------------------------------------------------------------------------------------------------------
+timestep: 0.002                # physics step, s (stable for the soft elastomer pads and the stiff arm servos)
+substeps: 25                   # physics steps per control step: control period 0.05 s = 20 Hz
+timeout: 15.0                  # episode length limit, s
+
+# --- robot -------------------------------------------------------------------------------------------------------
+arm_home: [0.0, -1.5708, 1.5708, -1.5708, -1.5708, 0.0]   # tool-down pose, hand over the bin, rad
+arm_range: [0.6, 0.6, 0.8, 0.8, 0.5, 1.6]                # allowed |q - home| per arm joint, rad
+arm_step: 0.03                 # max arm joint-target change per control step, rad (0.6 rad/s)
+hand_step: 0.041667            # max hand joint-target change per control step, rad (1/24, as in Sharpa's RL code)
+max_lead: [0.15, 0.4]          # max |target - measured| for [arm, hand] joints, rad
+hand_mount_quat: [1, 0, 0, 0]  # extra rotation hand <- flange (w x y z); identity = the flange adapter as designed
+
+# --- bin and table (base frame) -----------------------------------------------------------------------------------
+bin:
+  center: [-0.69, -0.17]       # under the hand at the home pose, m
+  floor_z: 0.29                # top of the bin floor, m
+  inner: [0.25, 0.25]          # inner width x depth, m
+  wall_height: 0.12            # m
+  wall_thickness: 0.01         # m
+  wall_alpha: 0.15             # render-only transparency of the walls (the robot has no camera)
+table_size: [0.7, 0.7]         # table top under the bin, m
+
+# --- objects ------------------------------------------------------------------------------------------------------
+n_slots: 4                     # active objects per world: 1 target + 3 distractors
+objects:
+  seed: 0                      # library seed: same seed -> same shapes and point clouds
+  n_objects: 64                # library size
+  heldout_frac: 0.25           # fraction of the library never used in "train" worlds
+  families: [box, cylinder, sphere, capsule, ellipsoid, prism, lblock, tblock]
+  extent: [0.035, 0.075]       # range of each full extent (length, width, height or diameter), m
+  thickness: [0.4, 0.6]        # bar thickness of L- and T-blocks, as a fraction of the smaller half extent
+  density: 300.0               # kg/m^3 (light wood / foam: fingertip forces are a few N)
+  max_mass: 0.12               # kg
+  n_points: 512                # surface points per target point cloud
+  friction: 0.8                # sliding friction of object geoms
+
+# --- tactile sensing ----------------------------------------------------------------------------------------------
+force_threshold: 0.2           # N; weaker contacts read as no contact (the real sensor's practical floor)
+# a fingertip sensor collects all contacts of its distal phalanx (elastomer pad + phalanx hull), see tactile.py
+
+# --- observation o_t: concatenation of these groups (all available on the real robot) -----------------------------
+# group        size  meaning (normalisation)                                       real-hardware source
+# arm_q           6  arm joint angles, (q - home) / arm_range                         UR RTDE actual_q
+# arm_qd          6  arm joint velocities / 1 rad/s                                   UR RTDE actual_qd
+# hand_q         22  hand joint angles mapped from their limits to [-1, 1]            Sharpa SDK joint positions
+# hand_qd        22  hand joint velocities / 5 rad/s                                  Sharpa SDK (or finite differences)
+# q_target       28  current joint targets (arm then hand), same scaling as *_q       the controller's own command
+# tcp_pose        9  tcp position (base, (p - home) / 0.25 m) + 6-D rotation          UR forward kinematics
+# tcp_wrench      6  flange force / 20 N, torque / 2 N m, payload compensated, flange frame   UR TCP force (RTDE)
+# tip_wrench     30  5 x pad force / 5 N, moment / 0.05 N m, tip frame                Sharpa tactile F6 output
+# tip_force       5  5 x |pad force| / 5 N                                            Sharpa F6 (magnitude)
+# tip_contact     5  5 x contact flag (|force| >= force_threshold)                    Sharpa F6 thresholded
+# tip_point      15  5 x contact point / 0.02 m, tip frame (0 if none)                Sharpa deformation map
+# tip_normal     15  5 x outward object normal, tip frame (0 if none)                 Sharpa deformation map
+# prev_action    28  last action in [-1, 1]                                           the policy's own output
+obs_groups: [arm_q, arm_qd, hand_q, hand_qd, q_target, tcp_pose, tcp_wrench, tip_wrench, tip_contact, tip_point,
+             tip_normal, prev_action]
+
+# --- confidence label (info["conf_gt"]) ---------------------------------------------------------------------------
+label: coverage                # coverage | binary
+coverage:
+  radius: 0.01                 # a target surface point within this distance of a pad contact counts as touched, m
+  full_at: 0.25                # coverage fraction that maps to confidence 1
+
+# --- reward -------------------------------------------------------------------------------------------------------
+pull_height: 0.05              # an object counts as pulled out when its lowest point is this far above the rim, m
+reward:
+  success: 10.0                # target pulled out (ends the episode)
+  wrong_pick: -5.0             # a distractor pulled out (ends the episode)
+  touch_target: 0.02           # per step with any pad on the target
+  lift: 5.0                    # per metre of target height gain (potential difference per step)
+  time: -0.005                 # per step
+  action_rate: -0.01           # times mean squared action change
+
+# --- rendering ----------------------------------------------------------------------------------------------------
+render:
+  width: 480
+  height: 360
+  camera: {lookat: [-0.69, -0.17, 0.40], distance: 0.75, azimuth: 225.0, elevation: -25.0}   # palm side
+
+# --- scripted touch explorer (tacfind/envs/explorer.py; data collection before any policy exists) -----------------
+explorer:
+  lattice: [5, 5, 6]           # IK lattice points over the bin in x, y, z (solved once on the CPU)
+  xy_range: 0.09               # tcp goals within +- this of the bin centre, m
+  p_aim: 0.8                   # probability of aiming at an object (read from the simulator) instead of a random spot
+  aim_offset: [0.02, -0.05]    # tcp goal relative to the aimed object, m: puts it between fingers and thumb
+  aim_noise: 0.02              # uniform +- noise on the aimed goal, m
+  z_range: [0.335, 0.62]       # tcp height range of the lattice, m (lowest: fingertips at the floor)
+  hover_z: 0.47                # tcp height while moving between touches, m
+  pull_z: 0.62                 # tcp height of a pull attempt, m
+  descend_speed: 0.10          # m/s
+  p_pull: 0.3                  # probability that a grasp is followed by a pull attempt
+  max_yaw: 0.4                 # random wrist rotation per touch, rad
+  wiggle: 0.008                # amplitude of the hold wiggle, m
+  durations: {move: 2.0, descend: 3.0, close: 1.0, hold: 1.0, pull: 1.5, open: 0.6, rise: 1.5}   # s, phase limits
+  # hand postures, 22 joints in actuator order: thumb CMC_FE CMC_AA MCP_FE MCP_AA IP, index/middle/ring MCP_FE
+  # MCP_AA PIP DIP, pinky CMC MCP_FE MCP_AA PIP DIP; grasps interpolate open -> close by a random fraction per finger
+  open: [0.9, -0.3, 0.2, 0.0, 0.1,  0.2, 0.0, 0.1, 0.1,  0.2, 0.0, 0.1, 0.1,  0.2, 0.0, 0.1, 0.1,
+         0.0, 0.2, 0.0, 0.1, 0.1]
+  close: [1.3, -0.3, 0.9, 0.0, 0.6,  1.2, 0.0, 0.7, 0.5,  1.2, 0.0, 0.7, 0.5,  1.2, 0.0, 0.7, 0.5,
+          0.2, 1.2, 0.0, 0.7, 0.5]
+  close_frac: [0.5, 1.0]
