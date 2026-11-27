@@ -14,6 +14,10 @@ and the experiment plan.
    effort do the subtasks: coding, writing artifacts, search.
 5. **Every training emits intermediate visualisations** (rollout videos, curves) so progress can be watched while it
    runs; analytics go to the run directory, and to Weights & Biases when enabled.
+6. **Experiments run in parallel on NVIDIA GPUs** (A100, RTX A6000, H100). One experiment lives entirely on one GPU:
+   batched physics (MuJoCo Warp), observations, labels, rewards and learning are all tensors on that device, with no
+   per-environment Python loops and no CPU round trips in the step path. `scripts/launch.py` fills the available GPUs
+   with runs. Never assume a GPU model or memory size; sizes come from the config.
 
 ## Code conventions
 

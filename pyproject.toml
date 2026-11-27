@@ -7,6 +7,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "torch",
     "mujoco==4.0.*",
+    "mujoco-warp==4.0.*",  # batched physics on the GPU (also runs on Warp's CPU device, used by the unit tests)
     "numpy",
     "hydra-core>=1.3",
     "tensorboard",
