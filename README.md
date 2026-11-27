@@ -10,39 +10,45 @@ _Updated after every change or finished experiment. Last update: 2026-11-27._
 
 ### Previous work done
 
-- **What:** The network modules, one file each in `tacfind/networks/`: three interchangeable spatial-temporal
-  encoders (MLP, 1-D CNN, Transformer), the Point Transformer target encoder, the cross-modal matcher with three
-  touch-input modes (tactile points, latent, latent with a positional header), the actor-critic, and `model.py`,
-  the single aggregate that wires them. Losses (contrastive, confidence, Chamfer) are in `tacfind/train/losses.py`.
-- **Why:** These are the parts the planned experiments swap, so each must be selectable by a config group and
-  testable without a simulator.
-- **Results:** 41 unit tests pass on CPU in about 25 s. Parameter counts are 0.5 M (small), 1.7 M (base) and 7.5 M
-  (large). A learnability check on synthetic surface patches under random rotation lifts contrastive top-1 accuracy
-  from 0.17 to 0.76 (chance is 0.25). Two problems surfaced. First, when the target encoder and the touch side learn
-  at the same rate, the object embeddings collapse onto one vector and accuracy stays at chance; the check passes
-  only with a 10x lower target-encoder learning rate. Second, the matcher's cross-attention needs about 5 MB per
-  sample per intermediate tensor in the worst case, too much for thousands of simulated worlds on one GPU.
+- **What:** The GPU-batched environment (`tacfind/envs/`): MuJoCo Warp physics with every world on one device and a
+  plain-MuJoCo reference backend for local tests; one model that holds the whole object library, with the objects
+  not in play parked out of the way; resets from a bank of settled bin states; batched fingertip tactile readings;
+  the confidence labels (contact ratio and binary); a scripted touch explorer; rendering of one world. In the same
+  step the networks got two fixes: a memory-lean attention with a cap on touch tokens, and a uniformity loss.
+- **Why:** Experiments have to run in parallel on NVIDIA GPUs, one experiment per GPU, so physics, observations and
+  labels must all be tensors on that device. The first network version needed too much memory for thousands of
+  worlds, and its object embeddings collapsed under plain contrastive training.
+- **Results:** 16 environment tests and 44 network tests pass on CPU. MuJoCo Warp (on its CPU device) matches CPU
+  MuJoCo to about 4e-6 rad over a short rollout. The observation has 192 values per step. With the scripted
+  explorer, fingertips are in contact in 12.6 % of steps and touch 2.25 distinct objects per episode; the
+  contact-ratio label averages 0.21 while in contact and peaks at 0.50. The explorer never managed to lift an object
+  out of the bin. Matcher memory in the worst case fell from 52.9 MB to 2.0 MB per sample. On a synthetic check
+  (3 seeds) the uniformity loss keeps the object embeddings apart and gives 0.59 top-1 accuracy against 0.36 without
+  it (chance 0.25); the lean attention learns more slowly than the original (0.59 against 0.75). Nothing has run on
+  a GPU yet.
 
 ### Ongoing
 
-- **What:** (1) Rewriting the environment as batched tensor code: MuJoCo Warp physics with all worlds on one GPU, a
-  CPU reference backend for local unit tests, tactile readings, labels, resets from a bank of settled states, and a
-  scripted touch explorer. (2) Fixing the two network problems: capping the touch tokens and making the
-  cross-attention memory-lean, and comparing four remedies for the embedding collapse.
-- **Why:** Experiments have to run in parallel on NVIDIA GPUs (A100, RTX A6000, H100), one experiment per GPU, so
-  nothing in the step path may run on the CPU and the networks must fit thousands of worlds in GPU memory.
-- **Predicted outcomes:** One experiment runs end to end on a single GPU with thousands of simulated worlds, the
-  matcher needs about 2 MB per sample or less, and one collapse remedy is chosen as the trainer default with
-  evidence. Throughput and GPU memory per world are unknown until the GPU smoke test.
+- **What:** (1) The trainer: configurable stages (contrastive, confidence, PPO on the encoder, PPO on the policy),
+  PPO, run directories with intermediate videos and curves, optional Weights & Biases, and `scripts/launch.py`,
+  which fills the available GPUs with queued runs. (2) The live viewer: MuJoCo Studio in the browser, served by the
+  simulation process and reached through an SSH tunnel. (3) A grasp feasibility check: can the simulated hand lift
+  each object family at all, with the official finger gains and with torque-limit gains.
+- **Why:** The trainer and launcher are what the planned experiments run on. The viewer lets a person watch and
+  drive the simulation on the GPU server. The feasibility check comes before any GPU time is spent on
+  reinforcement learning, because the explorer could not hold a single object.
+- **Predicted outcomes:** Every stage runs for a few iterations in unit tests on CPU, and a sweep file starts one
+  run per GPU. The viewer's server side works here; its browser side still has to be checked by a person. The
+  feasibility check either shows that lifting works with stronger finger gains or names what has to change
+  (friction, mass, size range, posture).
 
 ### Future works
 
 | Step | What | Waits for |
 |---|---|---|
-| Trainer | Staged training (contrastive, then confidence, then PPO on the encoder, then PPO on the policy) with intermediate videos and curves, optional Weights & Biases | environment, networks |
-| Launcher | `scripts/launch.py` fills all GPUs with queued runs | trainer |
-| Report | One page collecting every run: comment, rollout video, metric curves | trainer |
-| Live viewer | MuJoCo Studio in the browser, served by the process on the GPU server and reached through an SSH tunnel: pick a world, pause / step / reset, perturb bodies, drive the hand, see contacts and confidence | environment |
-| GPU smoke test | Every stage for a few iterations; measure throughput and memory | GPU access and approval |
+| Report: results tab | One page collecting every run: comment, rollout video, metric curves | trainer |
+| Report: architecture tab | The architecture drawn in the style of the original figure, updated with the decisions made; a dropdown picks the experiment; hyperparameters are editable inside the blocks and export as a config YAML; clicking a module shows its input shapes and its computation step by step | trainer (experiment presets) |
+| GPU smoke test | Every stage for a few iterations; measure throughput, memory per world and the cost of the library size | GPU access and approval |
 | Baseline E001 | Staged training, tactile-point-cloud matcher, 1-D CNN encoder, H = 30, contact-ratio label | smoke test |
-| Experiment axes | Matcher input (points / latent / latent header), training scheme, encoder type, H, label type, network scale | baseline |
+| Experiment axes | Matcher input (points / latent / latent header), training scheme, encoder type, H, label type, network scale, attention width | baseline |
+| Ideas to test later | Pretraining the matcher on synthetic touch patches without physics; rotation-invariant point features; a tactile deformation map instead of contact points | baseline results |
