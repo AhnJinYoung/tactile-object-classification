@@ -1,4 +1,4 @@
-# Per-step embedding + positional embedding counted back from now -> Transformer encoder. obs_dim and history are passed by TacFind.
+# Per-step embedding + positional embedding counted back from now -> Transformer (obs_dim, history from TacFind).
 _target_: tacfind.networks.touch_encoder.TransformerEncoder
 dim: ${dim}       # width of z_touch and of the tokens
 depth: ${depth}   # Transformer layers

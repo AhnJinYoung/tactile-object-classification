@@ -7,9 +7,10 @@ import torch
 from omegaconf import OmegaConf
 
 from tacfind.networks.model import TacFind
-from tacfind.networks.point_transformer import VectorAttention
+from tacfind.networks.matcher import PointTokenizer
+from tacfind.networks.point_transformer import VectorAttention, farthest_point_sample, gather, knn
 from tacfind.spec import EnvSpec
-from tacfind.train.losses import confidence_loss, contrastive_loss
+from tacfind.train.losses import confidence_loss, contrastive_loss, uniformity_loss
 
 torch.set_num_threads(4)
 CONFIGS = Path(__file__).resolve().parents[1] / "configs"
@@ -71,6 +72,43 @@ def test_scales_param_counts():
     assert counts["small"]["total"] < counts["base"]["total"] < counts["large"]["total"]
     assert set(counts["base"]) >= {"touch_encoder", "target_encoder", "matcher", "policy", "matcher.embed",
                                    "matcher.confidence", "total"}
+    for s in ["small", "large"]:  # the scale group also sizes the policy
+        model, cfg = make_model(scale=s), make_cfg(scale=s)
+        assert [m.out_features for m in model.policy.actor if isinstance(m, torch.nn.Linear)][:-1] == list(
+            cfg.policy_hidden)
+
+
+def test_grouped_attention_matches_naive_formula():
+    """The memory-lean einsum path equals y_i = sum_j w_ij * (alpha(x_j) + theta_val(h_ij)) built per pair."""
+    torch.manual_seed(0)
+    attn, x, pos = VectorAttention(16, groups=4, rel_dim=8), torch.randn(2, 7, 16), torch.randn(2, 7, 3)
+    mask = torch.rand(2, 7) > 0.3
+    for idx in [knn(pos, pos, 4, mask), None]:
+        nb = (lambda t: t[:, None]) if idx is None else (lambda t: gather(t, idx))
+        h = attn.theta(pos[:, :, None] - nb(pos))
+        logits = attn.gamma(attn.phi(x)[:, :, None] - nb(attn.psi(x)) + attn.theta_rel(h))
+        valid = nb(mask)[..., None]
+        w = logits.masked_fill(~valid, -1e30).softmax(2) * valid  # (B, Q, K, G)
+        naive = (w.repeat_interleave(4, -1) * (nb(attn.alpha(x)) + attn.theta_val(h))).sum(2)
+        assert torch.allclose(attn(x, x, pos, pos, idx, mask), naive, atol=1e-5)
+    y = attn(x, x, kv_mask=mask)  # no positions: no positional term at all
+    w = attn.gamma(attn.phi(x)[:, :, None] - attn.psi(x)[:, None]).masked_fill(~mask[:, None, :, None], -1e30)
+    assert torch.allclose(y, (w.softmax(2).repeat_interleave(4, -1) * attn.alpha(x)[:, None]).sum(2), atol=1e-5)
+
+
+def test_masked_fps_and_token_cap():
+    pos, mask = torch.randn(2, 10, 3), torch.zeros(2, 10, dtype=torch.bool)
+    mask[0, [1, 4, 7]] = True
+    mask[1, :6] = True
+    idx = farthest_point_sample(pos, 8, mask, start=torch.tensor([4, 2]))
+    assert idx[0, 0] == 4 and idx[1, 0] == 2 and all(len(set(row.tolist())) == 8 for row in idx)
+    assert set(idx[0, :3].tolist()) == {1, 4, 7} and mask[1, idx[1, :6]].all()  # valid points come first
+    tok = PointTokenizer(16, 1, max_tokens=4)
+    pts = torch.rand(2, 10, 8)
+    tokens, tmask, _ = tok(None, pts, mask)
+    assert tokens.shape == (2, 4, 16) and tmask[0].tolist() == [True] * 3 + [False] and tmask[1].all()
+    tokens, tmask, _ = tok(None, pts, mask & (torch.arange(10) < 1))  # row 0: no contact, row 1: one
+    assert tokens.shape == (2, 1, 16) and tmask.tolist() == [[False], [True]]
 
 
 def test_vector_attention_all_masked_gives_zeros():
@@ -145,6 +183,11 @@ def test_set_trainable():
     assert all(q.requires_grad == (id(q) in trainable) for q in model.parameters())
     assert model.matcher.embed.training and model.target_encoder.training
     assert not model.policy.training and not model.matcher.confidence.training and not model.touch_encoder.training
+    for mode in [False, True]:  # robust to call order: train() keeps the frozen parts in eval mode
+        model.train(mode)
+        assert model.matcher.embed.training == mode and model.target_encoder.training == mode
+        assert not model.policy.training and not model.matcher.confidence.training
+        assert not model.touch_encoder.training and not model.policy.actor[0].training
 
 
 # ---------------------------------------------------------------- learnability on synthetic primitives
@@ -194,11 +237,7 @@ def test_contrastive_learnability():
     torch.manual_seed(0)
     model = TacFind(make_cfg(matcher="points"), SPEC)
     lib = torch.stack([sample_primitive(k, 160) for k in ["sphere", "cylinder", "cube", "plate"]])
-    model.set_trainable(["target_encoder", "matcher.embed"])
-    # The target side learns 10x slower: at full speed the library embeddings collapse onto one vector (the optimum
-    # while e_touch is still uninformative), which stalls training at chance.
-    opt = torch.optim.Adam([{"params": model.matcher.embed.parameters()},
-                            {"params": model.target_encoder.parameters(), "lr": 2e-4}], lr=2e-3)
+    opt = torch.optim.Adam(model.set_trainable(["target_encoder", "matcher.embed"]), lr=2e-3)
     eval_pts, eval_mask, eval_obj = touch_batch(lib, 128)
     obs_hist, hist_mask = torch.zeros(1, 10, SPEC.obs_dim), torch.ones(1, 10, dtype=torch.bool)
 
@@ -206,7 +245,10 @@ def test_contrastive_learnability():
         code = model.encode_target(lib)
         z_touch = model.touch_encoder(obs_hist, hist_mask).expand(len(obj), -1)  # unused by the `points` tokenizer
         e_touch = model.matcher.embed(z_touch, pts, mask)[2]
-        return contrastive_loss(e_touch, code.z, obj, temperature=0.1)
+        loss, acc = contrastive_loss(e_touch, code.z, obj, temperature=0.1)
+        # Without the uniformity term the library embeddings collapse onto one vector (the optimum while e_touch is
+        # still uninformative) and training stalls at chance.
+        return loss + uniformity_loss(code.z), acc
 
     with torch.no_grad():
         acc_before = step(eval_pts, eval_mask, eval_obj)[1].item()

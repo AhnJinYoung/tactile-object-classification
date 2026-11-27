@@ -4,7 +4,7 @@ import math
 
 import torch
 
-from tacfind.train.losses import chamfer_loss, confidence_loss, contrastive_loss
+from tacfind.train.losses import chamfer_loss, confidence_loss, contrastive_loss, uniformity_loss
 
 torch.set_num_threads(4)
 
@@ -47,7 +47,9 @@ def test_chamfer_hand_case():
     est = torch.tensor([[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]]])
     touch = torch.tensor([[[5.0, 5.0, 5.0], [100.0, 0.0, 0.0]]])
     mask = torch.tensor([[True, False]])
-    assert math.isclose(chamfer_loss(est, touch, mask).item(), 1.0 + 1.0, rel_tol=1e-6)
+    assert math.isclose(chamfer_loss(est, touch, mask, pos_scale=1.0).item(), 1.0 + 1.0, rel_tol=1e-6)
+    # Default unit 0.1 m: the same geometry at a tenth of the size gives the same loss.
+    assert math.isclose(chamfer_loss(0.1 * est, 0.1 * touch, mask).item(), 2.0, rel_tol=1e-5)
 
 
 def test_chamfer_translation_and_invalid_rows():
@@ -60,3 +62,16 @@ def test_chamfer_translation_and_invalid_rows():
     assert torch.isfinite(est.grad).all()  # coincident points must not give NaN gradients
     est = torch.randn(2, 4, 3, requires_grad=True)
     assert_attached_zero(chamfer_loss(est, torch.randn(2, 5, 3), torch.zeros(2, 5, dtype=torch.bool)), est)
+
+
+def test_uniformity_hand_cases():
+    # Two antipodal unit vectors: |a - b|^2 = 4 -> log exp(-2 * 4) = -8; identical vectors -> log 1 = 0.
+    z = torch.tensor([[3.0, 0.0], [-1.0, 0.0]], requires_grad=True)
+    assert math.isclose(uniformity_loss(z).item(), -8.0, rel_tol=1e-6)
+    collapsed = torch.ones(4, 3, requires_grad=True)
+    loss = uniformity_loss(collapsed)
+    assert abs(loss.item()) < 1e-6
+    loss.backward()
+    assert torch.isfinite(collapsed.grad).all()  # finite gradient exactly at collapse, where it matters
+    one = torch.randn(1, 3, requires_grad=True)
+    assert_attached_zero(uniformity_loss(one), one)

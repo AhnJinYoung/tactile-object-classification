@@ -1,6 +1,8 @@
 # Matcher whose touch side is z_touch split into a few position-free tokens.
 _target_: tacfind.networks.matcher.CrossModalMatcher
 dim: ${dim}             # token width
+groups: ${attn_groups}  # weight groups of the target -> touch cross-attention (scale group)
+rel_dim: ${attn_rel_dim}  # relation width of the cross-attention (scale group)
 tokenizer:
   _target_: tacfind.networks.matcher.LatentTokenizer
   dim: ${dim}           # width of z_touch and of the tokens

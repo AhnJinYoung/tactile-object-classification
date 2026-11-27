@@ -1,4 +1,7 @@
 # @package _global_
 # Large networks: capacity check.
-dim: 256   # shared latent width (z_touch, tokens, z_target, z_diff)
-depth: 3   # blocks / layers per module (per stage in the target encoder)
+dim: 256                         # shared latent width (z_touch, tokens, z_target, z_diff)
+depth: 3                         # blocks / layers per module (per stage in the target encoder)
+attn_groups: 16                  # vector-attention weight groups G (dim / G channels share one weight)
+attn_rel_dim: 32                 # width R of the attention relation phi(q) - psi(k) + delta (R = dim: original layer)
+policy_hidden: [512, 512, 256]   # hidden widths of the actor and critic MLPs

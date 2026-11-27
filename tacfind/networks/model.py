@@ -51,6 +51,7 @@ class TacFind(nn.Module):
         self.target_encoder = instantiate(cfg.target_encoder)
         self.matcher = instantiate(cfg.matcher)
         self.policy = instantiate(cfg.policy, obs_dim=spec.obs_dim, act_dim=spec.act_dim, priv_dim=spec.priv_dim)
+        self.trainable: list[str] | None = None  # set by `set_trainable`; None = everything trains
 
     def encode_target(self, cloud: Tensor) -> TargetCode:
         """Args: cloud (B, N, 6) = [xyz object frame (m), unit normal]. Returns: TargetCode."""
@@ -88,14 +89,26 @@ class TacFind(nn.Module):
     def set_trainable(self, names: list[str]) -> list[nn.Parameter]:
         """Train only the named sub-modules (dotted paths, e.g. "matcher.embed"); freeze the rest in eval mode.
 
-        Call after `model.train()`, which would otherwise switch the frozen parts back to train mode.
+        The choice persists: a later `model.train()` keeps the frozen parts in eval mode.
         Returns:
             the trainable parameters, for the optimiser.
         """
-        self.requires_grad_(False).eval()
+        self.trainable = list(names)
+        self.requires_grad_(False)
         for name in names:
-            self.get_submodule(name).requires_grad_(True).train()
+            self.get_submodule(name).requires_grad_(True)
+        self.train(self.training)
         return [p for p in self.parameters() if p.requires_grad]
+
+    def train(self, mode: bool = True) -> "TacFind":
+        """nn.Module.train, except that parts frozen by `set_trainable` stay in eval mode."""
+        super().train(mode)
+        if mode and self.trainable is not None:
+            for module in self.children():
+                module.train(False)
+            for name in self.trainable:
+                self.get_submodule(name).train()
+        return self
 
     def param_counts(self) -> dict[str, int]:
         """Parameters per module (and per matcher stage), plus the total."""

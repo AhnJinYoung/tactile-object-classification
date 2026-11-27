@@ -35,19 +35,22 @@ class TargetCode:
 class TargetEncoder(nn.Module):
     """Point embedding -> per stage: transition-down + `depth` Point Transformer blocks -> max-pool -> linear."""
 
-    def __init__(self, dim: int, depth: int, stages: Sequence[int] = (128, 64), k: int = 16, pos_scale: float = 0.1):
+    def __init__(self, dim: int, depth: int, stages: Sequence[int] = (128, 64), k: int = 16, pos_scale: float = 0.1,
+                 groups: int | None = None, rel_dim: int | None = None):
         """Args:
             dim: token width.
             depth: Point Transformer blocks per stage.
             stages: points kept by each transition-down; the last entry is M, the number of target tokens.
             k: kNN neighbourhood size.
             pos_scale: length (m) that maps to one unit of the network's coordinates.
+            groups, rel_dim: grouped vector attention (see `VectorAttention`).
         """
         super().__init__()
         self.pos_scale = pos_scale
         self.embed = mlp(6, dim, dim)
         self.down = nn.ModuleList(TransitionDown(dim, m, k) for m in stages)
-        self.blocks = nn.ModuleList(nn.ModuleList(PointTransformerBlock(dim, k) for _ in range(depth)) for _ in stages)
+        self.blocks = nn.ModuleList(
+            nn.ModuleList(PointTransformerBlock(dim, k, groups, rel_dim) for _ in range(depth)) for _ in stages)
         self.norm, self.head = nn.LayerNorm(dim), nn.Linear(dim, dim)
 
     def forward(self, cloud: Tensor) -> TargetCode:

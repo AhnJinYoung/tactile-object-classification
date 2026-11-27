@@ -1,5 +1,5 @@
 # Asymmetric actor-critic MLPs. obs_dim, act_dim and priv_dim are passed by TacFind.
 _target_: tacfind.networks.policy.ActorCritic
 dim: ${dim}               # width of z_touch and z_diff (policy inputs)
-hidden: [256, 256, 128]   # hidden widths of actor and critic (independent of scale)
+hidden: ${policy_hidden}  # hidden widths of actor and critic (scale group)
 init_log_std: 0.0         # initial log std of the Gaussian action noise

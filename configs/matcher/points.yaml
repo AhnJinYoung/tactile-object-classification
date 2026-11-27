@@ -1,9 +1,14 @@
 # Matcher whose touch side is the tactile contact point cloud (Point Transformer self-attention among valid points).
 _target_: tacfind.networks.matcher.CrossModalMatcher
 dim: ${dim}             # token width
+groups: ${attn_groups}  # weight groups of the target -> touch cross-attention (scale group)
+rel_dim: ${attn_rel_dim}  # relation width of the cross-attention (scale group)
 tokenizer:
   _target_: tacfind.networks.matcher.PointTokenizer
   dim: ${dim}           # token width
   depth: ${depth}       # self-attention blocks among touch points
   k: 16                 # kNN neighbourhood size
   pos_scale: 0.1        # metres per network coordinate unit
+  max_tokens: 32        # touch tokens kept (farthest point sampling from the most recent contact)
+  groups: ${attn_groups}     # vector-attention weight groups (scale group)
+  rel_dim: ${attn_rel_dim}   # attention relation width (scale group)
