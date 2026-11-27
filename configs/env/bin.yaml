@@ -1,4 +1,5 @@
-# MuJoCo bin-picking scene: UR10e + Sharpa Wave right hand reaching blind into an open-top bin (tacfind/envs/).
+# MuJoCo table scene: UR10e + Sharpa Wave right hand searching blind among objects on a table (tacfind/envs/).
+# (The file and class keep the name `bin` / `BinEnv` for compatibility; there is no bin any more.)
 # Frames: "base" = robot base frame = world (z up, m); "tip" = fingertip pad frame (pad centre, distal-phalanx axes).
 
 assets: third_party            # fetched by scripts/fetch_assets.py, relative to the repository root
@@ -7,8 +8,11 @@ assets: third_party            # fetched by scripts/fetch_assets.py, relative to
 sim: warp                      # warp: MuJoCo Warp, all worlds batched on the env device (experiments) | cpu: reference
 nconmax: 96                    # contacts allocated per world, pooled over all worlds (warp only; CPU runs peak at 50)
 njmax: 500                     # constraint rows allocated per world, a hard cap (warp only; CPU runs peak at 250)
+solver_iterations: null        # null: iterate to convergence (CUDA graphs need driver >= 12.4 for conditional nodes);
+                               # an int: fixed solver iterations, conditional graph nodes off (older drivers)
+warp_nativeccd: true           # false: primitive box-box collision in Warp, as CPU MuJoCo (see the box-contact check)
 n_threads: 8                   # worker threads of the cpu backend
-bank_size: 1024                # settled bin states built at construction; resets copy a random one
+bank_size: 1024                # settled table states built at construction; resets copy a random one
 settle_time: 1.0               # objects fall and come to rest while the bank is built, s
 
 # --- timing ------------------------------------------------------------------------------------------------------
@@ -17,27 +21,36 @@ substeps: 25                   # physics steps per control step: control period 
 timeout: 15.0                  # episode length limit, s
 
 # --- robot -------------------------------------------------------------------------------------------------------
-arm_home: [0.0, -1.5708, 1.5708, -1.5708, -1.5708, 0.0]   # tool-down pose, hand over the bin, rad
-arm_range: [0.6, 0.6, 0.8, 0.8, 0.5, 1.6]                # allowed |q - home| per arm joint, rad
+arm_home: [-0.1537, -1.5905, 2.121, -2.1013, -1.5708, -0.1537]   # tool-down, tcp 0.245 m above the zone centre
+arm_range: [1.2, 1.0, 1.4, 1.4, 1.5, 2.0]   # allowed |q - home| per arm joint, rad: covers the zone below with
+                                            # both explorer orientations (IK reachability scan)
 arm_step: 0.03                 # max arm joint-target change per control step, rad (0.6 rad/s)
 hand_step: 0.041667            # max hand joint-target change per control step, rad (1/24, as in Sharpa's RL code)
 max_lead: [0.15, 0.4]          # max |target - measured| for [arm, hand] joints, rad
 hand_mount_quat: [1, 0, 0, 0]  # extra rotation hand <- flange (w x y z); identity = the flange adapter as designed
+finger_gains: mjcf             # mjcf: official Sharpa MJCF gains | torque_limit: kp = real torque limit / 0.01 rad
+                               # (YCB lift check: mjcf 23/63 trials, torque_limit 15/63; see grasp_check.py)
 
-# --- bin and table (base frame) -----------------------------------------------------------------------------------
-bin:
-  center: [-0.69, -0.17]       # under the hand at the home pose, m
-  floor_z: 0.29                # top of the bin floor, m
-  inner: [0.25, 0.25]          # inner width x depth, m
-  wall_height: 0.12            # m
-  wall_thickness: 0.01         # m
-  wall_alpha: 0.15             # render-only transparency of the walls (the robot has no camera)
-table_size: [0.7, 0.7]         # table top under the bin, m
+# --- table and object zone (base frame) ---------------------------------------------------------------------------
+table:
+  size: [0.8, 1.8]             # depth (x, away from the robot) x length (y), m
+  edge_x: -0.10                # x of the long edge at the robot base (the base column has a ~0.09 m radius), m
+  top_z: 0.0                   # table top = robot base height (the upper arm must clear the table when it leans), m
+  friction: 0.4                # wood / laminate (Engineering ToolBox wood-wood 0.25-0.5); object friction has priority
+zone:                          # where object centres are scattered. IK scan (5 cm grid, `arm_range`): the tcp reaches
+  center: [-0.625, -0.05]      # x -0.90..-0.35, y -0.40..0.30 from above, fingers down (z 0.045-0.18) and tilted
+  size: [0.45, 0.60]           # (z 0.01-0.29); the zone keeps ~5 cm for the tcp offsets around an object, m
+floor_z: -0.75                 # floor plane (objects pushed off the table land there), m
 
 # --- objects ------------------------------------------------------------------------------------------------------
-n_slots: 4                     # active objects per world: 1 target + 3 distractors
+n_slots: 8                     # max objects per world (padded tensors use this size)
+n_active: [3, 8]               # objects per world drawn uniformly from this range at reset, one of them the target
 objects:
-  seed: 0                      # library seed: same seed -> same shapes and point clouds
+  set: ycb                     # ycb: YCB scans (tacfind/envs/ycb.py: list, masses, materials, sources) | procedural
+  seed: 0                      # cloud sampling (and procedural shape) seed
+  n_points: 512                # surface points per target point cloud
+  # procedural set only. Every object of the split is a free body in the one shared model (nv = 28 + 6 x split
+  # size): more objects = more diversity but more physics cost per world, to be measured in the GPU smoke test
   n_objects: 64                # library size
   heldout_frac: 0.25           # fraction of the library never used in "train" worlds
   families: [box, cylinder, sphere, capsule, ellipsoid, prism, lblock, tblock]
@@ -45,12 +58,22 @@ objects:
   thickness: [0.4, 0.6]        # bar thickness of L- and T-blocks, as a fraction of the smaller half extent
   density: 300.0               # kg/m^3 (light wood / foam: fingertip forces are a few N)
   max_mass: 0.12               # kg
-  n_points: 512                # surface points per target point cloud
   friction: 0.8                # sliding friction of object geoms
+
+# --- domain randomisation, drawn per world at every reset (warp: per-world model fields) ---------------------------
+randomize:
+  enabled: true
+  mass_scale: [0.85, 1.15]     # object mass (and inertia) factor
+  friction_scale: [0.8, 1.2]   # object sliding friction factor
+  com_offset: 0.004            # uniform +- shift of each object's centre of mass per axis, m
+  force_noise: 0.05            # std of Gaussian noise on each fingertip force component, N (moment: x 0.01 m)
+  force_threshold: [0.15, 0.25]   # per-world contact threshold, N (replaces force_threshold when enabled)
 
 # --- tactile sensing ----------------------------------------------------------------------------------------------
 force_threshold: 0.2           # N; weaker contacts read as no contact (the real sensor's practical floor)
-# a fingertip sensor collects all contacts of its distal phalanx (elastomer pad + phalanx hull), see tactile.py
+# a fingertip sensor collects the contacts of its distal phalanx (elastomer pad + phalanx hull), see tactile.py
+pad_only: true                 # keep only contacts inside the pad's bounding box (the real sensor senses on the pad)
+pad_margin: 0.002              # growth of that box, m
 
 # --- observation o_t: concatenation of these groups (all available on the real robot) -----------------------------
 # group        size  meaning (normalisation)                                       real-hardware source
@@ -76,41 +99,55 @@ coverage:
   radius: 0.01                 # a target surface point within this distance of a pad contact counts as touched, m
   full_at: 0.25                # coverage fraction that maps to confidence 1
 
-# --- reward -------------------------------------------------------------------------------------------------------
-pull_height: 0.05              # an object counts as pulled out when its lowest point is this far above the rim, m
-reward:
-  success: 10.0                # target pulled out (ends the episode)
-  wrong_pick: -5.0             # a distractor pulled out (ends the episode)
-  touch_target: 0.02           # per step with any pad on the target
-  lift: 5.0                    # per metre of target height gain (potential difference per step)
-  time: -0.005                 # per step
-  action_rate: -0.01           # times mean squared action change
+# --- episode outcome and reward -------------------------------------------------------------------------------------
+lift_height: 0.10              # success: the target's lowest point this high above the table ...
+hold_time: 1.0                 # ... for this long, s. A distractor lifted and held the same way is a wrong pick
+drop_margin: 0.05              # an object whose centre is this far below the table top has left the table, m
+                               # (target off the table: the episode ends as a failure; distractor: a penalty only)
+reward:                        # sparse by default: only success and wrong pick; shaping terms are options (0 = off)
+  success: 10.0                # target lifted and held (ends the episode)
+  wrong_pick: -5.0             # a distractor lifted and held (ends the episode)
+  dropped: 0.0                 # option: per object that leaves the table (the target ends the episode regardless)
+  touch_target: 0.0            # option: per step with any pad on the target
+  lift: 0.0                    # option: per metre of target height gain (potential difference per step)
+  time: 0.0                    # option: per step
+  action_rate: 0.0             # option: times mean squared action change
 
 # --- rendering ----------------------------------------------------------------------------------------------------
 render:
-  width: 480
-  height: 360
-  camera: {lookat: [-0.69, -0.17, 0.40], distance: 0.75, azimuth: 225.0, elevation: -25.0}   # palm side
+  width: 640
+  height: 480
+  camera: {lookat: [-0.60, -0.05, 0.32], distance: 1.25, azimuth: 30.0, elevation: -48.0}   # zone, robot, objects
 
 # --- scripted touch explorer (tacfind/envs/explorer.py; data collection before any policy exists) -----------------
 explorer:
-  lattice: [5, 5, 6]           # IK lattice points over the bin in x, y, z (solved once on the CPU)
-  xy_range: 0.09               # tcp goals within +- this of the bin centre, m
+  lattice: [7, 11, 8]          # IK lattice points over the zone + `lattice_margin` (once on the CPU, per orientation)
+  lattice_margin: 0.05         # lattice reaches this far beyond the zone, m
+  z_range: [0.01, 0.33]        # lattice tcp height range, m
   p_aim: 0.8                   # probability of aiming at an object (read from the simulator) instead of a random spot
-  aim_offset: [0.02, -0.05]    # tcp goal relative to the aimed object, m: puts it between fingers and thumb
+  aim_offset: [0.02, -0.05]    # touch: tcp goal relative to the aimed object, m: puts it between fingers and thumb
   aim_noise: 0.02              # uniform +- noise on the aimed goal, m
-  z_range: [0.335, 0.62]       # tcp height range of the lattice, m (lowest: fingertips at the floor)
-  hover_z: 0.47                # tcp height while moving between touches, m
-  pull_z: 0.62                 # tcp height of a pull attempt, m
-  descend_speed: 0.10          # m/s
-  p_pull: 0.3                  # probability that a grasp is followed by a pull attempt
+  hover_z: 0.18                # tcp height while moving between objects, m
+  descend_min_z: 0.045         # lowest tcp of a touch descent, m (fingertips at the table)
+  pull_z: 0.29                 # tcp height of a pull (lifts a grasped object > lift_height), m
+  descend_speed: 0.12          # m/s
+  p_pull: 0.6                  # probability that a cycle is a planned grasp and lift (tilted hand: touches more)
+  pull_target: 0.5             # probability that a pull aims at the target (else a random object): success data
+  p_regrasp: 0.35              # probability that a touch is followed by another touch of the same object
+  regrasp_rise: 0.04           # rise before a re-grasp, m (instead of going back to hover_z)
   max_yaw: 0.4                 # random wrist rotation per touch, rad
-  wiggle: 0.008                # amplitude of the hold wiggle, m
-  durations: {move: 2.0, descend: 3.0, close: 1.0, hold: 1.0, pull: 1.5, open: 0.6, rise: 1.5}   # s, phase limits
+  wiggle: 0.01                 # amplitude of the hold wiggle, m
+  durations: {move: 2.5, descend: 3.0, close: 1.0, hold: 2.0, pull: 2.5, open: 0.6, rise: 1.5}   # s, phase limits
   # hand postures, 22 joints in actuator order: thumb CMC_FE CMC_AA MCP_FE MCP_AA IP, index/middle/ring MCP_FE
-  # MCP_AA PIP DIP, pinky CMC MCP_FE MCP_AA PIP DIP; grasps interpolate open -> close by a random fraction per finger
+  # MCP_AA PIP DIP, pinky CMC MCP_FE MCP_AA PIP DIP; grasps interpolate open -> close by a random fraction per finger.
+  # `close` is a thumb-index/middle pinch (pads meet in front of the palm), found by search with grasp_check.py
   open: [0.9, -0.3, 0.2, 0.0, 0.1,  0.2, 0.0, 0.1, 0.1,  0.2, 0.0, 0.1, 0.1,  0.2, 0.0, 0.1, 0.1,
          0.0, 0.2, 0.0, 0.1, 0.1]
-  close: [1.3, -0.3, 0.9, 0.0, 0.6,  1.2, 0.0, 0.7, 0.5,  1.2, 0.0, 0.7, 0.5,  1.2, 0.0, 0.7, 0.5,
-          0.2, 1.2, 0.0, 0.7, 0.5]
+  close: [1.2, -0.3, 0.8, 0.0, 0.4,  1.1, 0.0, 0.5, 0.4,  1.1, 0.0, 0.5, 0.4,  1.1, 0.0, 0.5, 0.4,
+          0.1, 1.1, 0.0, 0.5, 0.4]
   close_frac: [0.5, 1.0]
+  # privileged grasp-and-lift (grasp_check.py; pull attempts): the hand tilts about the base x axis so the palm faces
+  # the table (with fingers straight down the pinch point sits 9-12 cm above the fingertips: taller than any object)
+  grasp_tilt: -1.2             # rad
+  grasp_shift: [-0.01, 0.02, 0.0]   # pinch point target relative to the object centre, base frame, m
+  grasp_pre: 0.3               # descend with the hand at this fraction of `close`

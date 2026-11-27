@@ -1,0 +1,10 @@
+# End-to-end training: as `joint`, but PPO gradients also flow into the matcher and the target encoder.
+# iters and lr are placeholders, untuned.
+stages:
+  joint:
+    actor: policy
+    iters: 2000
+    train: [touch_encoder, target_encoder, matcher, policy]
+    loss: {ppo: 1.0, contrastive: 1.0, uniform: 1.0, confidence: 1.0, chamfer: 1.0}
+    lr: 3.0e-4
+    detach_matcher: false

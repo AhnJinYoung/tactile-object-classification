@@ -1,0 +1,5 @@
+# @package _global_
+defaults:
+  - override /matcher: latent_head
+name: E004_matcher_latent_head
+description: Matcher reads z_touch as estimated contact points (Chamfer-supervised), a geometry prior without raw points.

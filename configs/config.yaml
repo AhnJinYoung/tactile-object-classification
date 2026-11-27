@@ -1,6 +1,7 @@
 # Root config: one experiment = this file + command-line overrides.
 #   python scripts/train.py touch_encoder=transformer matcher=latent history=10 name=E012_tf_latent_H10
 #   python scripts/train.py -m history=10,30,60 scale=small,base        # sweep: one run per combination
+#   python scripts/train.py +experiment=E001_baseline                     # a preset from configs/experiment/
 defaults:
   - env: bin                           # MuJoCo scene, observations, labels, reward
   - touch_encoder: cnn1d               # spatial-temporal encoder: mlp | cnn1d | transformer
@@ -10,8 +11,58 @@ defaults:
   - train: staged                      # training scheme: staged | joint | end_to_end
   - scale: base                        # network size: small | base | large (sets dim and depth)
   - _self_
+  - override hydra/job_logging: stdout  # console only: no log file in the working directory
 
 name: dev        # run name -> runs/<timestamp>_<name>/
 seed: 0
 device: auto     # auto = cuda when available, else cpu
 history: 30      # H: past steps seen by the spatial-temporal encoder and kept in the tactile point cloud
+description: ""  # one line: what this run changes and why (shown in summary.json and the report)
+runs_dir: runs  # run directories are created under this path (relative to the repository root)
+
+# --- rollout and update (placeholders, untuned) ------------------------------------------------------------------
+n_envs: 4096           # parallel worlds on the one GPU of this run (size it to the GPU with the smoke test)
+rollout_steps: 32      # T: env steps per world and iteration
+perceive_chunk: 1024   # worlds per matcher call when acting (bounds the cross-attention's memory)
+optim:
+  epochs: 4            # passes over each rollout (a stage may set its own `epochs`)
+  batch_size:          # samples per minibatch (a stage may set its own `batch_size`); sized for a 40 GB GPU:
+    perception: 4096   # stages with a contrastive / confidence / chamfer loss: the matcher with gradients needs up
+                       # to ~2 MB per sample (CPU measurement, worst case) -> ~8 GB; 16k samples would need ~32 GB
+    ppo: 16384         # pure PPO stages: matcher outputs come from the rollout, only the encoder + MLPs backprop
+  max_grad_norm: 1.0   # gradient clipping
+ppo:
+  gamma: 0.99          # discount per control step (0.05 s)
+  lam: 0.95            # GAE lambda
+  clip: 0.2            # ratio clip range
+  value_coef: 0.5      # value loss weight inside the ppo term
+  entropy_coef: 0.001  # entropy bonus weight inside the ppo term
+  target_kl: 0.02      # stop the epochs of an update when their mean approximate KL exceeds this
+loss:
+  temperature: 0.1     # InfoNCE temperature of the contrastive loss
+  uniform_t: 2.0       # kernel sharpness of the uniformity loss
+  augment_rotate: true # encode each library cloud under a random rotation in the update (augmentation)
+
+# --- stages, checkpoints, visualisation --------------------------------------------------------------------------
+init_from: null        # checkpoint file or run directory (-> ckpt/last.pt) whose weights start this run
+run_stages: null       # run only these stages of the scheme, e.g. [encoder_ppo,policy_ppo] (null = all)
+max_iters: null        # cap on every stage's iterations (smoke tests)
+log_every: 1           # iterations between metrics.jsonl rows
+ckpt_every: 100        # iterations between ckpt/last.pt saves (and at the end of each stage)
+viz_every: 50          # iterations between rollout videos and curves.png (and at the end of each stage)
+viz_steps: 200         # env steps per video (10 s at 20 Hz; may span several iterations)
+viz_world: 0           # world rendered in the videos (and first shown by the live view)
+live_port: null        # HTTP port: watch the training worlds live in the browser (spectating only; 0 = first free
+                       # port from 8080). No authentication: reach it only through an SSH tunnel.
+wandb:
+  enabled: false       # also log scalars and videos to Weights & Biases (pip install wandb; key from the env)
+  project: tacfind
+  entity: null
+
+# Hydra never changes the working directory and writes nothing (except runs/_multirun/multirun.yaml for -m):
+# each run makes its own runs/<timestamp>_<name>/.
+hydra:
+  run: {dir: .}
+  sweep: {dir: runs/_multirun, subdir: .}  # only multirun.yaml lands here; each job makes its own run directory
+  output_subdir: null
+  job: {chdir: false}

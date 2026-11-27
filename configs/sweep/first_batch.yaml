@@ -1,0 +1,17 @@
+# First batch: the baseline and one change per axis. Run with: python scripts/launch.py first_batch
+# runs: one list of override strings per run. Optional `grid: {key: [values]}` crosses every run with every
+# combination; optional `common: [overrides]` is added to every run.
+runs:
+  - [+experiment=E001_baseline]
+  - [+experiment=E002_label_binary]
+  - [+experiment=E003_matcher_latent]
+  - [+experiment=E004_matcher_latent_head]
+  - [+experiment=E005_encoder_mlp]
+  - [+experiment=E006_encoder_transformer]
+  - [+experiment=E007_history_10]
+  - [+experiment=E008_history_60]
+  - [+experiment=E009_train_joint]
+  - [+experiment=E010_train_end_to_end]
+  - [+experiment=E011_scale_small]
+  - [+experiment=E012_scale_large]
+  - [+experiment=E013_attention_16x32]

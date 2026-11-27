@@ -1,0 +1,10 @@
+# Joint training: one stage, the policy acts, every module trains on every loss; PPO gradients stop at the matcher
+# outputs (detach_matcher), so perception learns only from its own losses. iters and lr are placeholders, untuned.
+stages:
+  joint:
+    actor: policy
+    iters: 2000
+    train: [touch_encoder, target_encoder, matcher, policy]
+    loss: {ppo: 1.0, contrastive: 1.0, uniform: 1.0, confidence: 1.0, chamfer: 1.0}
+    lr: 3.0e-4
+    detach_matcher: true

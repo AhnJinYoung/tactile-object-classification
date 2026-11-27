@@ -15,8 +15,8 @@ def pytest_configure(config):
 @pytest.fixture
 def cfg():
     """`env` config on the CPU reference backend with a small settled-state bank."""
-    if not (REPO / "third_party" / "sharpa").is_dir():
-        pytest.skip("robot assets missing: run scripts/fetch_assets.py")
+    if not all((REPO / "third_party" / d).is_dir() for d in ("sharpa", "mujoco_menagerie", "ycb")):
+        pytest.skip("robot / object assets missing: run scripts/fetch_assets.py")
     c = OmegaConf.load(REPO / "configs" / "env" / "bin.yaml")
     c.sim, c.bank_size = "cpu", 8
     return c

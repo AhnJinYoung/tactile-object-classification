@@ -4,6 +4,7 @@
 state is exposed as float32 tensors of shape (nworld, ...); writes go through `set_*`. One MjModel serves all worlds.
 """
 
+import copy
 from concurrent.futures import ThreadPoolExecutor
 
 import mujoco
@@ -11,6 +12,8 @@ import numpy as np
 import torch
 
 READ_FIELDS = ("qpos", "qvel", "xpos", "xmat", "geom_xpos", "site_xpos", "site_xmat", "subtree_com", "sensordata")
+# model fields that can differ per world (domain randomisation); MuJoCo Warp batches them with put_model(batch_sizes)
+WORLD_FIELDS = ("body_mass", "body_subtreemass", "body_inertia", "body_ipos", "geom_friction")
 
 
 class CpuSim:
@@ -28,6 +31,7 @@ class CpuSim:
     def __init__(self, model: mujoco.MjModel, nworld: int, n_threads: int = 8, **_):
         assert model.opt.cone == mujoco.mjtCone.mjCONE_ELLIPTIC
         self.model, self.nworld, self.device = model, nworld, torch.device("cpu")
+        self.models = [copy.deepcopy(model) for _ in range(nworld)]  # per-world fields (`set_model`)
         self.datas = [mujoco.MjData(model) for _ in range(nworld)]
         self.pool = ThreadPoolExecutor(min(n_threads, nworld))
         self.ctrl = torch.zeros(nworld, model.nu)
@@ -45,6 +49,12 @@ class CpuSim:
         """Actuator controls (nworld, nu) held for the next steps."""
         self.ctrl[:] = ctrl
 
+    def set_model(self, mask: torch.Tensor, name: str, value: torch.Tensor) -> None:
+        """Per-world model field `name` (one of WORLD_FIELDS) = value (nworld, ...) for the worlds in `mask` (N,)."""
+        v = value.double().numpy()
+        for r in mask.nonzero()[:, 0].tolist():
+            getattr(self.models[r], name)[:] = v[r]
+
     def set_xfrc(self, xfrc: torch.Tensor) -> None:
         """Applied body wrenches (nworld, nbody, 6) [force N, torque N m], base frame, held for the next steps."""
         self.xfrc_applied[:] = xfrc
@@ -56,15 +66,15 @@ class CpuSim:
         def run(i: int) -> None:
             d = self.datas[i]
             d.ctrl[:], d.xfrc_applied[:] = ctrl[i], xfrc[i]
-            mujoco.mj_step(self.model, d, nstep=nstep)
+            mujoco.mj_step(self.models[i], d, nstep=nstep)
 
         list(self.pool.map(run, range(self.nworld)))
         self._pull()
 
     def forward(self) -> None:
         """Recompute kinematics, contacts, constraint forces and sensors without advancing time."""
-        for d in self.datas:
-            mujoco.mj_forward(self.model, d)
+        for m, d in zip(self.models, self.datas):
+            mujoco.mj_forward(m, d)
         self._pull()
 
     def contacts(self) -> dict:
@@ -113,10 +123,16 @@ class WarpSim:
         device: torch / warp device string, e.g. "cuda", "cuda:1", "cpu".
         nconmax: contacts allocated per world (pooled over all worlds: one world may use more).
         njmax: constraint rows allocated per world (hard per-world cap).
+        solver_iterations: None = iterate until all worlds converge (needs CUDA conditional graph nodes, i.e. a
+            CUDA driver >= 12.4, to be captured in a graph); an int = that fixed number of solver iterations with
+            conditional nodes off (converged worlds are skipped), for older drivers.
+        nativeccd: False = collide box-box pairs with the primitive box-box routine (up to 8 points, as CPU MuJoCo
+            does) instead of GJK/EPA multicontact; the flag changes nothing else in MuJoCo Warp and is applied to
+            the Warp model only.
     """
 
     def __init__(self, model: mujoco.MjModel, nworld: int, device: str = "cuda", nconmax: int = 64,
-                 njmax: int = 300, **_):
+                 njmax: int = 300, solver_iterations: int | None = None, nativeccd: bool = True, **_):
         import warp as wp
 
         wp.config.log_level = wp.LOG_WARNING  # no per-kernel load messages (set before mujoco_warp initialises warp)
@@ -128,9 +144,15 @@ class WarpSim:
         self.device = torch.device(device)
         d = mujoco.MjData(model)
         mujoco.mj_forward(model, d)
+        flags = model.opt.disableflags
+        if not nativeccd:
+            model.opt.disableflags |= mujoco.mjtDisableBit.mjDSBL_NATIVECCD
         with wp.ScopedDevice(self.wdevice):
-            self.mw = mjw.put_model(model)
+            self.mw = mjw.put_model(model, {f: nworld for f in WORLD_FIELDS})  # per-world copies for `set_model`
             self.dw = mjw.put_data(model, d, nworld=nworld, nconmax=nconmax, njmax=njmax)
+        model.opt.disableflags = flags
+        if solver_iterations is not None:
+            self.mw.opt.graph_conditional, self.mw.opt.iterations = False, int(solver_iterations)
         t, dw = wp.to_torch, self.dw
         self.ctrl, self.xfrc_applied, self._qpos, self._qvel = t(dw.ctrl), t(dw.xfrc_applied), t(dw.qpos), t(dw.qvel)
         self._carry = [t(dw.qacc_warmstart), t(dw.cvel), t(dw.cdof_dot)]  # per-world arrays a reset must clear
@@ -156,6 +178,13 @@ class WarpSim:
     def set_ctrl(self, ctrl: torch.Tensor) -> None:
         """Actuator controls (nworld, nu) held for the next steps."""
         self.ctrl.copy_(ctrl)
+
+    def set_model(self, mask: torch.Tensor, name: str, value: torch.Tensor) -> None:
+        """Per-world model field `name` (one of WORLD_FIELDS) = value (nworld, ...) for the worlds in `mask` (N,);
+        in place, so captured CUDA graphs see it."""
+        field = self.wp.to_torch(getattr(self.mw, name))
+        m = mask.view(-1, *[1] * (field.dim() - 1))
+        field.copy_(torch.where(m, value.to(field).view_as(field), field))
 
     def set_xfrc(self, xfrc: torch.Tensor) -> None:
         """Applied body wrenches (nworld, nbody, 6) [force N, torque N m], base frame, held for the next steps."""

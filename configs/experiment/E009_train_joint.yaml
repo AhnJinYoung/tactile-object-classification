@@ -1,0 +1,5 @@
+# @package _global_
+defaults:
+  - override /train: joint
+name: E009_train_joint
+description: Joint training of all modules on all losses (matcher detached from PPO) instead of stages.

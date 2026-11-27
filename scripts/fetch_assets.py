@@ -1,4 +1,4 @@
-"""Download the robot models the MuJoCo scene is built from into the git-ignored `third_party/`.
+"""Download the robot and object models the MuJoCo scene is built from into the git-ignored `third_party/`.
 
 Run once before using `tacfind.envs`: `python scripts/fetch_assets.py`. Idempotent: a repository that is already at
 its pinned commit is left alone. Only the needed files are fetched (shallow, sparse, blob-filtered clones).
@@ -6,6 +6,8 @@ its pinned commit is left alone. Only the needed files are fetched (shallow, spa
 
 import subprocess
 from pathlib import Path
+
+from tacfind.envs.ycb import OBJECTS
 
 ROOT = Path(__file__).resolve().parents[1] / "third_party"
 
@@ -22,6 +24,13 @@ ASSETS = {
         "87de65dc893569ea638a69853ef6340008898eb1",
         ["/wave_01/right_sharpa_wave/*.xml", "/wave_01/right_sharpa_wave/meshes/", "/LICENSE*"],  # no USD files
         "Apache-2.0",
+    ),
+    # YCB Google-16k scans with CoACD collision hulls, only the objects of the library (about 3 MB each)
+    "ycb": (
+        "https://github.com/elpis-lab/YCB_Dataset",
+        "9e8c6488a2ff673d9aa48a91492fb89423c1b106",
+        ["/LICENSE", "/README.md", "/scripts/ycb_mass.json"] + [f"/ycb/{name}/" for name in OBJECTS],
+        "repository MIT; YCB models CC BY 4.0 (ycbbenchmarks.com)",
     ),
 }
 

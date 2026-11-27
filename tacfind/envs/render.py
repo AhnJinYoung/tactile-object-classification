@@ -13,11 +13,12 @@ from PIL import Image, ImageDraw
 
 from tacfind.envs.bin_env import BinEnv
 
-TARGET_RGBA = (0.2, 0.85, 0.3, 1.0)
+TARGET_RGBA = (0.2, 0.9, 0.3, 0.25)
 
 
 class WorldRenderer:
-    """Renders world i of a `BinEnv` from the config camera; the target object is drawn green, contacts as dots.
+    """Renders world i of a `BinEnv` from the config camera with the textured objects; a translucent green sphere
+    marks the target, red dots the tactile contact points.
 
     Args:
         env: the environment.
@@ -25,28 +26,27 @@ class WorldRenderer:
 
     def __init__(self, env: BinEnv):
         rc = env.cfg.render
-        self.env, self.data = env, mujoco.MjData(env.mjm)
-        self.renderer = mujoco.Renderer(env.mjm, rc.height, rc.width)
+        self.env, self.model = env, env.textured_model()
+        self.data = mujoco.MjData(self.model)
+        self.renderer = mujoco.Renderer(self.model, rc.height, rc.width)
         self.cam = mujoco.MjvCamera()
         self.cam.lookat[:], self.cam.distance = rc.camera.lookat, rc.camera.distance
         self.cam.azimuth, self.cam.elevation = rc.camera.azimuth, rc.camera.elevation
 
     def __call__(self, i: int) -> np.ndarray:
         """RGB frame (H, W, 3) uint8 of world i."""
-        m, d, st = self.env.mjm, self.data, self.env.world_state(i)
+        m, d, st = self.model, self.data, self.env.world_state(i)
         d.qpos[:] = st["qpos"]
         mujoco.mj_forward(m, d)
-        rgba = m.geom_rgba.copy()
-        parked = np.isin(m.geom_bodyid, self.env.obj_body.cpu().numpy()) & ~np.isin(m.geom_bodyid, st["active_body"])
-        m.geom_rgba[parked, 3] = 0.0  # hide parked objects
-        m.geom_rgba[m.geom_bodyid == st["active_body"][st["target_slot"]]] = TARGET_RGBA
         self.renderer.update_scene(d, self.cam)
-        m.geom_rgba[:] = rgba
-        scn = self.renderer.scene
-        for p in st["pts"][st["pts_valid"]]:  # tactile contact points as small red spheres
+        scn, eye = self.renderer.scene, np.eye(3).ravel()
+        target = int(st["active_body"][st["target_slot"]])
+        radius = float(self.env.clouds[int(st["target_lib"]), :, :3].norm(dim=-1).max()) + 0.01
+        marks = [(d.xpos[target], radius, TARGET_RGBA)]
+        marks += [(p, 0.006, (1, 0.1, 0.1, 1)) for p in st["pts"][st["pts_valid"]]]
+        for pos, size, rgba in marks:
             if scn.ngeom < scn.maxgeom:
-                mujoco.mjv_initGeom(scn.geoms[scn.ngeom], mujoco.mjtGeom.mjGEOM_SPHERE, [0.006, 0, 0], p,
-                                    np.eye(3).ravel(), [1, 0.1, 0.1, 1])
+                mujoco.mjv_initGeom(scn.geoms[scn.ngeom], mujoco.mjtGeom.mjGEOM_SPHERE, [size, 0, 0], pos, eye, rgba)
                 scn.ngeom += 1
         return self.renderer.render()
 

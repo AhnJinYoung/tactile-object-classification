@@ -2,7 +2,8 @@
 
 contrastive_loss: touch embedding vs. object library (stage 1); confidence_loss: matcher confidence (stage 2);
 chamfer_loss: auxiliary supervision of the estimated contact points of `matcher=latent_head`;
-uniformity_loss: spreads the library embeddings on the sphere (counteracts their collapse in stage 1).
+uniformity_loss: spreads the library embeddings on the sphere (counteracts their collapse in stage 1);
+ppo_loss: clipped PPO surrogate + value regression (policy stages).
 Rows without a label are skipped; when none is valid every loss returns a zero that is still attached to the graph.
 """
 
@@ -85,3 +86,20 @@ def uniformity_loss(z: Tensor, t: float = 2.0) -> Tensor:
     sq_dist = (2 - 2 * z @ z.T).clamp(min=0)  # |a - b|^2 for unit vectors; smooth, unlike cdist at 0
     eye = torch.eye(n, dtype=torch.bool, device=z.device)
     return torch.logsumexp((-t * sq_dist).masked_fill(eye, float("-inf")).flatten(), 0) - math.log(n * (n - 1))
+
+
+def ppo_loss(log_prob: Tensor, old_log_prob: Tensor, adv: Tensor, value: Tensor, ret: Tensor,
+             clip: float) -> tuple[Tensor, Tensor, Tensor]:
+    """Clipped PPO surrogate and value regression.
+
+    Args:
+        log_prob, old_log_prob: (B,) log-probabilities of the taken actions under the current / rollout policy.
+        adv: (B,) normalised advantages. value: (B,) current value. ret: (B,) GAE returns. clip: ratio clip range.
+    Returns:
+        policy loss, value loss (0.5 * MSE), approximate KL(old || new) (detached), all scalars.
+    """
+    log_ratio = log_prob - old_log_prob
+    ratio = log_ratio.exp()
+    policy = -torch.min(ratio * adv, ratio.clamp(1 - clip, 1 + clip) * adv).mean()
+    kl = ((ratio - 1) - log_ratio).mean().detach()
+    return policy, 0.5 * (value - ret).square().mean(), kl

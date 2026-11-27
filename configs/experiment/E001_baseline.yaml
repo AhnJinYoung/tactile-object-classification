@@ -1,0 +1,3 @@
+# @package _global_
+name: E001_baseline
+description: Baseline - staged training, points matcher, cnn1d encoder, H=30, coverage label (all defaults).

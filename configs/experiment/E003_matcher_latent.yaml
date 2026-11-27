@@ -1,0 +1,5 @@
+# @package _global_
+defaults:
+  - override /matcher: latent
+name: E003_matcher_latent
+description: Matcher reads z_touch as position-free tokens instead of contact points, to test whether explicit geometry is needed.

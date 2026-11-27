@@ -1,0 +1,4 @@
+# @package _global_
+name: E002_label_binary
+description: Binary confidence label (touching the target now) instead of coverage, to test whether the soft label helps.
+env: {label: binary}

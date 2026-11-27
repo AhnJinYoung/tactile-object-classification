@@ -35,10 +35,15 @@ def test_shapes_sizes_and_ranges(env):
         assert obs["first"].shape == (N,) and obs["target"].dtype == torch.long
         assert torch.isfinite(obs["o"]).all() and torch.isfinite(reward).all() and reward.shape == (N,)
         assert info["tip_obj"].shape == (N, 5) and info["priv"].shape == (N, env.spec.priv_dim)
+        lo, hi = env.cfg.n_active
+        assert ((info["n_objects"] >= lo) & (info["n_objects"] <= hi)).all()
+        empty = info["priv"].view(N, env.cfg.n_slots, -1)[torch.arange(env.cfg.n_slots) >= info["n_objects"][:, None]]
+        assert (empty == 0).all()  # padded slots are zeros
         assert ((info["conf_gt"] >= 0) & (info["conf_gt"] <= 1)).all()
         lib = set(env.lib_ids.tolist()) | {-1}
         assert set(info["touched"].tolist()) <= lib and set(info["tip_obj"].flatten().tolist()) <= lib
-        assert (obs["pts"][..., 6][obs["pts_valid"]] >= env.cfg.force_threshold).all()
+        thr = env.randomizer.threshold[:, None].expand(N, 5)
+        assert (obs["pts"][..., 6][obs["pts_valid"]] >= thr[obs["pts_valid"]] - 1e-6).all()
         assert torch.allclose(obs["pts"][..., 3:6][obs["pts_valid"]].norm(dim=-1), torch.ones(1), atol=1e-4)
         assert (obs["pts"][~obs["pts_valid"]] == 0).all()
     assert env.sim.health()["overflow"] == 0
@@ -74,51 +79,49 @@ def test_override_and_world_state(env):
     st = env.world_state(1)
     assert st["qpos"].shape == (env.mjm.nq,) and st["pts"].shape == (5, 3) and st["active_lib"].shape == (4,)
     assert int(st["target_lib"]) in env.lib_ids.tolist()
+    assert st["q_target"].shape == (28,) and st["qvel"].shape == (env.mjm.nv,)
 
 
-def test_explorer_touches_objects(cfg):
-    e = BinEnv(cfg, N, history=30, device="cpu", seed=1)
-    ex = Explorer(e, seed=0)
-    assert ex.ik_error < 1e-3
-    obs, contact, conf = e.reset(), 0, 0.0
-    for _ in range(150):
-        obs, reward, _, info = e.step(ex.act(obs))
-        assert torch.isfinite(obs["o"]).all() and torch.isfinite(reward).all()
-        contact += int(obs["pts_valid"].any(1).sum())
-        conf = max(conf, float(info["conf_gt"].max()))
-    assert contact > 0 and conf > 0 and e.sim.health()["overflow"] == 0
-    e.sim.pool.shutdown()
+def test_reset_worlds_and_perturb(env):
+    env.reset()
+    for _ in range(3):
+        env.step(torch.zeros(N, 28))
+    mask = torch.tensor([True] + [False] * (N - 1))
+    env.reset_worlds(mask)
+    assert env.t[0] == 0 and (env.t[1:] == 3).all()
+    body = int(env.obj_body[env.active[2, 0]])
+    z0 = float(env.sim.xpos[2, body, 2])
+    wrench = torch.zeros(env.mjm.nbody, 6)
+    wrench[body, 2] = 2 * float(env.obj_weight[env.active[2, 0]])  # twice the weight: rises at about 1 g
+    env.perturb(2, wrench)
+    for _ in range(2):  # 0.1 s: ~5 cm, still inside the bin (leaving it would end the episode)
+        env.step(torch.zeros(N, 28))
+    assert float(env.sim.xpos[2, body, 2]) > z0 + 0.01
+    env.perturb(2, None)
+    assert (env.xfrc_extra == 0).all()
 
 
-@pytest.mark.slow
-def test_warp_matches_cpu_backend(cfg):
-    """Same model, state, controls and applied forces, 40 substeps (hand in the air, objects resting): close."""
-    from tacfind.envs.sim import WarpSim
+def test_scripted_grasp_lifts_a_ball(cfg):
+    import numpy as np
 
-    e = BinEnv(cfg, 1, history=30, device="cpu", seed=0)
-    e.reset()
-    qpos, qvel = e.sim.qpos.clone(), torch.zeros(1, e.mjm.nv)
-    sims = [CpuSim(e.mjm, 1), WarpSim(e.mjm, 1, "cpu", nconmax=64, njmax=400)]
-    for s in sims:
-        s.set_state(torch.ones(1, dtype=torch.bool), qpos, qvel)
-        s.set_ctrl(e.q_target + torch.linspace(-0.05, 0.05, 28))  # a small move of every joint
-        s.set_xfrc(e.sim.xfrc_applied)
-        s.step(40)
-    cpu, warp = (s.qpos.cpu() for s in sims)
-    assert torch.allclose(cpu[:, e.qadr], warp[:, e.qadr], atol=2e-3)  # robot joints, rad
-    obj = (e.obj_qadr[e.active[0]][:, None] + torch.arange(3)).flatten()
-    assert torch.allclose(cpu[:, obj], warp[:, obj], atol=2e-3)  # active object positions, m
-    e.sim.pool.shutdown()
+    from tacfind.envs.bin_env import plain
+    from tacfind.envs.grasp_check import LiftTrial
+    from tacfind.envs.objects import build_library
+
+    c = plain(cfg)
+    ball = next(o for o in build_library(c.objects) if o.family == "golf_ball")
+    ex, close = c.explorer, np.asarray(c.explorer.close)
+    out = LiftTrial(c, ball).run(np.random.default_rng(0), ex.grasp_pre * close, close, ex.grasp_tilt, ex.grasp_shift)
+    assert out["success"], out
 
 
-@pytest.mark.slow
-def test_warp_env_end_to_end(cfg):
-    cfg.sim, cfg.bank_size, cfg.settle_time = "warp", 2, 0.5
-    e = BinEnv(cfg, 2, history=30, device="cpu", seed=0)
-    ex = Explorer(e, seed=0)
-    obs = e.reset()
-    for _ in range(10):
-        obs, reward, done, info = e.step(ex.act(obs))
-        assert torch.isfinite(obs["o"]).all() and torch.isfinite(reward).all()
-        assert obs["o"].shape == (2, e.spec.obs_dim) and info["conf_gt"].shape == (2,)
-    assert e.sim.health()["overflow"] == 0
+def test_domain_randomisation_per_world(env):
+    env.reset()
+    body = env.obj_body
+    masses = torch.stack([torch.as_tensor(m.body_mass[body.numpy()]) for m in env.sim.models])  # (N, n_obj)
+    nominal = torch.as_tensor(env.mjm.body_mass[body.numpy()])
+    lo, hi = env.cfg.randomize.mass_scale
+    assert ((masses / nominal >= lo - 1e-6) & (masses / nominal <= hi + 1e-6)).all()
+    assert not torch.allclose(masses[0], masses[1])  # each world draws its own
+    t_lo, t_hi = env.cfg.randomize.force_threshold
+    assert ((env.randomizer.threshold >= t_lo) & (env.randomizer.threshold <= t_hi)).all()

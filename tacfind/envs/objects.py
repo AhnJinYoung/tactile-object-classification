@@ -1,12 +1,18 @@
-"""Procedural, seeded object library: shapes as unions of MuJoCo primitives plus their surface point clouds.
+"""Object library: YCB scans (`objects.set: ycb`, see `ycb.py`) or seeded procedural shapes (unions of primitives).
 
-The library is the source of both the simulated objects (`scene.py` turns each part into a geom) and the target point
+The library is the source of both the simulated objects (`scene.py` turns each entry into geoms) and the target point
 clouds the networks match touches against (`clouds`, one `(N, 6)` cloud with outward normals per object).
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
+
+from tacfind.envs import ycb
+
+REPO = Path(__file__).resolve().parents[2]
+_CACHE = {}
 
 FAMILIES = ("box", "cylinder", "sphere", "capsule", "ellipsoid", "prism", "lblock", "tblock")
 
@@ -31,16 +37,22 @@ class LibObject:
     """A library object: a union of parts with its mass and surface point cloud.
 
     Attributes:
-        family: shape family name.
-        parts: convex parts; overlapping parts form a union.
+        family: shape family (procedural) or YCB object name.
+        parts: convex parts of a procedural object (overlapping parts form a union); () for a YCB object.
         mass: total mass, kg.
-        cloud: (N, 6) float32 surface points (m) and outward unit normals, object frame.
+        cloud: (N, 6) float32 surface points (m) and outward unit normals, object (= body) frame.
+        mesh: YCB object name (its mesh directory), "" for procedural objects.
+        material: material class (friction source), "procedural" for procedural objects.
+        friction: sliding friction of the object's geoms (object vs table / other objects).
     """
 
     family: str
     parts: tuple
     mass: float
     cloud: np.ndarray
+    mesh: str = ""
+    material: str = "procedural"
+    friction: float = 0.8
 
 
 def prism_vertices(side: float) -> np.ndarray:
@@ -191,15 +203,36 @@ def surface_cloud(parts: tuple, n: int, rng: np.random.Generator) -> np.ndarray:
     return pts[rng.choice(len(pts), n, replace=False)].astype(np.float32)
 
 
-def build_library(cfg) -> list[LibObject]:
-    """Build the seeded object library.
+def build_library(cfg, root: Path = REPO / "third_party") -> list[LibObject]:
+    """Build the object library (cached per configuration).
 
     Args:
-        cfg: `env.objects` config node (n_objects, families, extent, thickness, density, max_mass, n_points, seed).
+        cfg: `env.objects` config node (set, n_points, seed; procedural: n_objects, families, extent, thickness,
+            density, max_mass, friction).
+        root: fetched assets (YCB meshes).
 
     Returns:
-        n_objects library objects, families cycled in config order, sizes drawn uniformly from the config ranges.
+        YCB: the objects of `ycb.OBJECTS` in table order. Procedural: n_objects objects, families cycled in config
+        order, sizes drawn uniformly from the config ranges.
     """
+    key = (getattr(cfg, "set", "procedural"), cfg.seed, cfg.n_points, getattr(cfg, "n_objects", 0), str(root))
+    if key not in _CACHE:
+        _CACHE[key] = _build_ycb(cfg, root) if key[0] == "ycb" else _build_procedural(cfg)
+    return _CACHE[key]
+
+
+def _build_ycb(cfg, root: Path) -> list[LibObject]:
+    """YCB library: measured masses, material friction, clouds sampled from the visual scans."""
+    rng, lib = np.random.default_rng(cfg.seed), []
+    for name, (mass, material, _) in ycb.OBJECTS.items():
+        verts, faces, _ = ycb.load_mesh(root, name)
+        cloud = ycb.sample_mesh(verts, faces, cfg.n_points, rng)
+        lib.append(LibObject(name, (), mass, cloud, mesh=name, material=material, friction=ycb.FRICTION[material]))
+    return lib
+
+
+def _build_procedural(cfg) -> list[LibObject]:
+    """Seeded procedural library (unions of primitives)."""
     rng = np.random.default_rng(cfg.seed)
     lib = []
     for i in range(cfg.n_objects):
@@ -207,12 +240,16 @@ def build_library(cfg) -> list[LibObject]:
         dims = rng.uniform(*cfg.extent, 3)
         parts = make_parts(family, dims, rng.uniform(*cfg.thickness))
         mass = min(cfg.density * sum(volume(p) for p in parts), cfg.max_mass)  # overlaps make this a slight overcount
-        lib.append(LibObject(family, parts, float(mass), surface_cloud(parts, cfg.n_points, rng)))
+        lib.append(LibObject(family, parts, float(mass), surface_cloud(parts, cfg.n_points, rng),
+                             friction=cfg.friction))
     return lib
 
 
 def split_indices(cfg, split: str) -> np.ndarray:
-    """Library indices of the "train" or "heldout" split (a seeded permutation; `heldout_frac` of it is held out)."""
+    """Library indices of the "train" or "heldout" split. YCB: the split column of `ycb.OBJECTS`; procedural: a
+    seeded permutation of which `heldout_frac` is held out."""
+    if getattr(cfg, "set", "procedural") == "ycb":
+        return np.array([i for i, (*_, s) in enumerate(ycb.OBJECTS.values()) if s == split])
     perm = np.random.default_rng(cfg.seed + 1).permutation(cfg.n_objects)
     n_held = int(round(cfg.heldout_frac * cfg.n_objects))
     return np.sort(perm[:n_held] if split == "heldout" else perm[n_held:])

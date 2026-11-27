@@ -1,0 +1,5 @@
+# @package _global_
+defaults:
+  - override /scale: small
+name: E011_scale_small
+description: Small networks (dim 64, depth 1), to test whether capacity limits the baseline.

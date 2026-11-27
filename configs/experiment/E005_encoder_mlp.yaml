@@ -1,0 +1,5 @@
+# @package _global_
+defaults:
+  - override /touch_encoder: mlp
+name: E005_encoder_mlp
+description: MLP touch encoder over the flattened window instead of the 1-D CNN, the simplest temporal model.

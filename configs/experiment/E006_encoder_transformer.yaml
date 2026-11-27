@@ -1,0 +1,5 @@
+# @package _global_
+defaults:
+  - override /touch_encoder: transformer
+name: E006_encoder_transformer
+description: Transformer touch encoder instead of the 1-D CNN, to test long-range temporal attention.

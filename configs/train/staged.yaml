@@ -1,0 +1,33 @@
+# Staged training (the user's first try): perception from explorer data first, then PPO.
+# A stage: actor (explorer = scripted, policy = actor-critic) drives the robot for `iters` iterations; only the `train`
+# sub-modules of TacFind learn (dotted names; `touch_side` = matcher.embed, + touch_encoder when the matcher reads
+# z_touch); `loss` weights the terms ppo | contrastive | uniform | confidence | chamfer (0 / absent = off).
+# Override a stage from the command line: train.stages.encoder_ppo.lr=1e-4 train.stages.contrastive.iters=50
+# iters, lr and epochs are placeholders, untuned.
+stages:
+  contrastive:
+    actor: explorer
+    iters: 500
+    train: [target_encoder, touch_side]
+    loss: {contrastive: 1.0, uniform: 1.0, chamfer: 1.0}   # uniform: without it the library embeddings collapse
+    lr: 3.0e-4
+    epochs: 1
+  confidence:
+    actor: explorer
+    iters: 200
+    train: [matcher.confidence]
+    loss: {confidence: 1.0}
+    lr: 3.0e-4
+    epochs: 1
+  encoder_ppo:
+    actor: policy
+    iters: 1000
+    train: [touch_encoder, policy]
+    loss: {ppo: 1.0}
+    lr: 3.0e-4
+  policy_ppo:
+    actor: policy
+    iters: 1000
+    train: [policy]
+    loss: {ppo: 1.0}
+    lr: 3.0e-4

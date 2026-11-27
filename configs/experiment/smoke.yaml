@@ -1,0 +1,13 @@
+# @package _global_
+# First run on a GPU server: a few iterations of every stage with a few hundred worlds; prints throughput
+# (perf/env_steps_per_s) and peak memory (perf/gpu_mem_gb) per iteration.
+name: smoke
+description: Smoke test - 3 iterations of every staged stage with 256 worlds, to measure throughput and GPU memory.
+n_envs: 256
+rollout_steps: 16
+max_iters: 3
+optim: {epochs: 1}
+viz_every: 2
+viz_steps: 32
+ckpt_every: 2
+env: {bank_size: 256}

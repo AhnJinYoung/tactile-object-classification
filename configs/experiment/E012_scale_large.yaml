@@ -1,0 +1,5 @@
+# @package _global_
+defaults:
+  - override /scale: large
+name: E012_scale_large
+description: Large networks (dim 256, depth 3), to test whether more capacity helps.

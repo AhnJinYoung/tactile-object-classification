@@ -1,0 +1,5 @@
+# @package _global_
+defaults:
+  - override /train: end_to_end
+name: E010_train_end_to_end
+description: End-to-end training, PPO gradients also reach the matcher and target encoder.

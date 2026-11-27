@@ -1,0 +1,4 @@
+# @package _global_
+name: E008_history_60
+description: History H=60 (3 s) instead of 30, to test whether longer touch memory helps.
+history: 60

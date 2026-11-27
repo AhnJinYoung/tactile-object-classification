@@ -1,0 +1,5 @@
+# @package _global_
+name: E013_attention_16x32
+description: Vector attention with 16 weight groups and relation width 32 (base 8x16), finer attention at base width.
+attn_groups: 16
+attn_rel_dim: 32

@@ -1,0 +1,4 @@
+# Brief comments on experiments, shown in the report's results table (docs/report/, built by scripts/report.py).
+# Key: an experiment name (e.g. E001_baseline) or a run directory name (e.g. 20261201-101500_E001_baseline);
+# a run directory key wins over its experiment name. Value: one or two plain sentences, written after analysing
+# the run's results.

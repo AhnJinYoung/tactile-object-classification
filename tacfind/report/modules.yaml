@@ -1,0 +1,545 @@
+# Per-module explanations for the report's architecture tab (docs/report/). Data only: the page renders it, and
+# tests/test_report.py checks every `shape` against the real tensors (forward hooks on TacFind for every preset).
+#
+# Expressions (symbol definitions, shape entries, foreach lists) use one tiny grammar that Python
+# (tacfind/report/specs.py) and JavaScript (docs/report/src/symbols.js) both evaluate: numbers, names, dotted config
+# paths, [i] indexing, + - * // ( ), and the functions min, max, len, at(list, i, default).
+# A name is a symbol when the table defines it (and it is not the symbol being defined), otherwise a config path.
+# `by: <group>` picks the expression by the selected option of that config group.
+# A step's `trace` names what the test hooks: module output (`io: out`, `index` into a tuple output), the module's
+# positional input (`io: in`, `index` = argument number), or a parameter (`param`).
+
+symbols:
+  B:   {expr: null, means: batch (worlds of a rollout, or samples of a minibatch)}
+  H:   {expr: history, means: history length in control steps (20 Hz)}
+  D_o: {expr: 192, means: values per observation o_t (sum of the observation groups)}
+  A:   {expr: 28, means: action size (6 arm + 22 hand joint-target increments)}
+  P:   {expr: 10 * env.n_slots, means: "privileged state for the critic: per object 3 position + 6 rotation + 1 target flag"}
+  N:   {expr: env.objects.n_points, means: points of the target point cloud}
+  dim: {expr: dim, means: shared latent width (z_touch, tokens, z_target, z_diff)}
+  G:   {expr: attn_groups, means: vector-attention weight groups (dim / G channels share one weight)}
+  R:   {expr: attn_rel_dim, means: width of the attention relation}
+  M:   {expr: "target_encoder.stages[-1]", means: target tokens (points kept by the last transition-down)}
+  L:   {expr: 5 * H, means: tactile points in the window (5 fingertips x H steps)}
+  T:
+    expr: {by: matcher, points: "min(L, matcher.tokenizer.max_tokens)", latent: matcher.tokenizer.n_tokens,
+           latent_head: matcher.tokenizer.n_points}
+    means: "touch tokens: points = contacts kept (at most max_tokens; at run time min(max_tokens, contacts in the
+      busiest window of the batch)); latent = n_tokens; latent_head = K estimated points"
+  K_m:
+    expr: {by: matcher, points: "min(matcher.tokenizer.k, T)", latent_head: T}
+    means: neighbours per touch token in the touch-side self-attention (all tokens when there are at most k)
+  F_a: {expr: "policy_hidden[0]", means: first hidden width of the actor and the critic}
+
+modules:
+  target_encoder:
+    title: Target encoder
+    class: tacfind.networks.target_encoder.TargetEncoder
+    config: target_encoder
+    purpose: >-
+      Encodes the target object's point cloud once per object. Its M tokens are the queries of the matcher's
+      cross-attention; z_target is the object's contrastive embedding (the library row the touch embedding must
+      match).
+    inputs:
+      - {name: cloud, shape: [B, N, 6], means: "surface points: xyz in the object frame (m) + unit outward normal"}
+    outputs:
+      - {name: tokens, shape: [B, M, dim], means: target tokens (queries of matcher.confidence)}
+      - {name: z_target, shape: [B, dim], means: contrastive embedding of the object}
+    steps:
+      - name: Centre and scale
+        text: Positions are centred on the cloud centroid and divided by pos_scale; the normal is appended.
+        formula: "p = (x - mean(x)) / pos_scale,  f = [p, n]"
+        shape: [B, N, 6]
+        trace: {module: target_encoder.embed, io: in}
+      - name: Point embedding
+        text: MLP 6 -> dim -> dim with GELU, applied to every point.
+        formula: "x = W2 GELU(W1 f)"
+        shape: [B, N, dim]
+        trace: {module: target_encoder.embed, io: out}
+      - foreach: {index: i, over: target_encoder.stages,
+                  let: {S: "target_encoder.stages[i]", S_prev: "at(target_encoder.stages, i - 1, N)",
+                        K_d: "min(target_encoder.k, S_prev)", K_b: "min(target_encoder.k, S)"}}
+        steps:
+          - name: "Stage {n}: farthest point sampling"
+            text: Keeps S of the S_prev points, each new one the farthest from those already kept (deterministic).
+            formula: "c_1 = p_0,  c_m = argmax_p min_{l<m} |p - c_l|"
+            shape: [B, S, 3]
+            trace: {module: "target_encoder.down.{i}", io: out, index: 1}
+          - name: "Stage {n}: kNN grouping"
+            text: Each kept centre gathers its K_d nearest points, as [relative position, feature].
+            formula: "g_mj = [p_j - c_m, x_j],  j in kNN(c_m)"
+            shape: [B, S, K_d, "dim + 3"]
+            trace: {module: "target_encoder.down.{i}.mlp", io: in}
+          - name: "Stage {n}: MLP + max-pool"
+            text: Linear -> LayerNorm -> GELU on every neighbour, then the maximum over the group.
+            formula: "x_m = max_j GELU(LN(W g_mj))"
+            shape: [B, S, dim]
+            trace: {module: "target_encoder.down.{i}", io: out, index: 0}
+          - name: "Stage {n}: attention weights (block 1 of depth)"
+            text: >-
+              Point Transformer block: LayerNorm, linear, then grouped vector attention over the K_b nearest
+              tokens. One weight per group of dim / G channels, softmax over the neighbours j.
+            formula: "w_ij = softmax_j gamma(phi(q_i) - psi(k_j) + theta_r(h_ij)),  h_ij = GELU(W (p_i - p_j))"
+            shape: [B, S, K_b, G]
+            trace: {module: "target_encoder.blocks.{i}.0.attn.gamma", io: out}
+          - name: "Stage {n}: Point Transformer blocks x depth"
+            text: Weighted sum of values plus the positional value term, a linear layer, and the residual.
+            formula: "x_i <- x_i + W_o sum_j w_ij (alpha(x_j) + theta_v(h_ij))"
+            shape: [B, S, dim]
+            trace: {module: "target_encoder.blocks.{i}.0", io: out}
+      - name: Normalise tokens
+        text: LayerNorm of the last stage's features; these are the target tokens.
+        formula: "t_m = LN(x_m)"
+        shape: [B, M, dim]
+        trace: {module: target_encoder.norm, io: out}
+      - name: Max-pool
+        text: Maximum over the M tokens.
+        formula: "g = max_m t_m"
+        shape: [B, dim]
+        trace: {module: target_encoder.head, io: in}
+      - name: z_target
+        text: Linear head.
+        formula: "z_target = W g + b"
+        shape: [B, dim]
+        trace: {module: target_encoder.head, io: out}
+
+  touch_encoder.mlp:
+    when: {touch_encoder: mlp}
+    title: Spatial-temporal encoder (MLP)
+    class: tacfind.networks.touch_encoder.MLPEncoder
+    config: touch_encoder
+    purpose: Compresses the observation history into z_touch with a plain MLP over the flattened window.
+    inputs:
+      - {name: obs_hist, shape: [B, H, D_o], means: "o_(t-H+1..t), oldest first, zero before the episode start"}
+      - {name: hist_mask, shape: [B, H], means: true where the step is real}
+    outputs:
+      - {name: z_touch, shape: [B, dim], means: spatial-temporal touch embedding}
+    steps:
+      - name: Mask and flatten
+        text: Padded steps are zeroed and a mask flag is appended to every step, so padding differs from real zeros.
+        formula: "u = flatten([o_s * m_s, m_s] for s = 1..H)"
+        shape: [B, "H * (D_o + 1)"]
+        trace: {module: touch_encoder.net, io: in}
+      - name: Hidden layers x depth
+        text: Linear -> LayerNorm -> GELU, width 2 dim.
+        formula: "h = GELU(LN(W u))"
+        shape: [B, "2 * dim"]
+        trace: {module: touch_encoder.net.0, io: out}
+      - name: z_touch
+        text: Final linear layer.
+        formula: "z_touch = W h + b"
+        shape: [B, dim]
+        trace: {module: touch_encoder.net, io: out}
+
+  touch_encoder.cnn1d:
+    when: {touch_encoder: cnn1d}
+    title: Spatial-temporal encoder (1-D CNN)
+    class: tacfind.networks.touch_encoder.CNN1dEncoder
+    config: touch_encoder
+    purpose: >-
+      Compresses the observation history into z_touch: a per-step embedding, residual convolutions over time, and
+      a mean over the real steps. Any H works (the weights do not depend on it).
+    inputs:
+      - {name: obs_hist, shape: [B, H, D_o], means: "o_(t-H+1..t), oldest first, zero before the episode start"}
+      - {name: hist_mask, shape: [B, H], means: true where the step is real}
+    outputs:
+      - {name: z_touch, shape: [B, dim], means: spatial-temporal touch embedding}
+    steps:
+      - name: Per-step embedding
+        text: One linear layer applied to each o_s.
+        formula: "e_s = W o_s + b"
+        shape: [B, H, dim]
+        trace: {module: touch_encoder.embed, io: out}
+      - name: Channels first, padding zeroed
+        text: Transposed for the convolution; steps before the episode start are multiplied by 0.
+        formula: "x = e^T * m"
+        shape: [B, dim, H]
+        trace: {module: touch_encoder.convs.0, io: in}
+      - name: Residual temporal convolution x depth
+        text: Same-padded 1-D convolution over time (kernel steps wide), GELU, masked, added to the input.
+        formula: "x <- x + GELU(conv_k(x)) * m"
+        shape: [B, dim, H]
+        trace: {module: touch_encoder.convs.0, io: out}
+      - name: Masked mean over time
+        text: Average over the real steps only.
+        formula: "g = sum_s m_s x_s / sum_s m_s"
+        shape: [B, dim]
+        trace: {module: touch_encoder.head, io: in}
+      - name: z_touch
+        text: MLP dim -> dim -> dim with LayerNorm and GELU.
+        formula: "z_touch = W2 GELU(LN(W1 g))"
+        shape: [B, dim]
+        trace: {module: touch_encoder.head, io: out}
+
+  touch_encoder.transformer:
+    when: {touch_encoder: transformer}
+    title: Spatial-temporal encoder (Transformer)
+    class: tacfind.networks.touch_encoder.TransformerEncoder
+    config: touch_encoder
+    purpose: >-
+      Compresses the observation history into z_touch with self-attention over time. A learned position embedding
+      is counted back from the current step, so row 0 always means "now".
+    inputs:
+      - {name: obs_hist, shape: [B, H, D_o], means: "o_(t-H+1..t), oldest first, zero before the episode start"}
+      - {name: hist_mask, shape: [B, H], means: true where the step is real (o_t is always treated as real)}
+    outputs:
+      - {name: z_touch, shape: [B, dim], means: spatial-temporal touch embedding}
+    steps:
+      - name: Per-step embedding
+        text: One linear layer applied to each o_s.
+        formula: "e_s = W o_s + b"
+        shape: [B, H, dim]
+        trace: {module: touch_encoder.embed, io: out}
+      - name: Add position embedding
+        text: Learned vector per age (H rows), flipped so the newest step gets row 0.
+        formula: "x_s = e_s + pos[H - s]"
+        shape: [B, H, dim]
+        trace: {module: touch_encoder.net, io: in}
+      - name: Self-attention (layer 1 of depth)
+        text: Pre-norm multi-head attention (heads) over the H steps; padded steps are masked as keys.
+        formula: "x <- x + MHA(LN(x))"
+        shape: [B, H, dim]
+        trace: {module: touch_encoder.net.layers.0.self_attn, io: out, index: 0}
+      - name: Feed-forward (layer 1 of depth)
+        text: Pre-norm MLP with ReLU, hidden width 2 dim, residual.
+        formula: "x <- x + W2 ReLU(W1 LN(x))"
+        shape: [B, H, "2 * dim"]
+        trace: {module: touch_encoder.net.layers.0.linear1, io: out}
+      - name: Transformer output
+        text: After all depth layers.
+        shape: [B, H, dim]
+        trace: {module: touch_encoder.net, io: out}
+      - name: Masked mean over time
+        text: Average over the real steps.
+        formula: "g = sum_s m_s x_s / sum_s m_s"
+        shape: [B, dim]
+        trace: {module: touch_encoder.head, io: in}
+      - name: z_touch
+        text: LayerNorm and linear.
+        formula: "z_touch = W LN(g) + b"
+        shape: [B, dim]
+        trace: {module: touch_encoder.head, io: out}
+
+  matcher.embed.points:
+    when: {matcher: points}
+    title: Matcher, embed (tactile points)
+    class: tacfind.networks.matcher.TouchEmbed + PointTokenizer
+    config: matcher.tokenizer
+    purpose: >-
+      Turns the tactile point cloud of the last H steps into touch tokens (keys and values of the confidence
+      cross-attention) and pools them into e_touch, the contrastive embedding of what is being touched.
+    inputs:
+      - {name: touch_pts, shape: [B, L, 8], means: "contact point (base frame, m), normal, force (N), age in [0, 1]"}
+      - {name: touch_mask, shape: [B, L], means: true where a fingertip had a contact}
+    outputs:
+      - {name: tokens, shape: [B, T, dim], means: touch tokens}
+      - {name: e_touch, shape: [B, dim], means: contrastive touch embedding}
+    steps:
+      - name: Keep at most max_tokens contacts
+        text: >-
+          Farthest point sampling seeded at the most recent contact keeps T points (20 Hz contacts are highly
+          redundant). Each point becomes [centred xyz / pos_scale, normal, log(1 + force), age].
+        formula: "keep = FPS(p, T, start = argmin age)"
+        shape: [B, T, 8]
+        trace: {module: matcher.embed.tokenizer.embed, io: in}
+      - name: Centred positions
+        text: Centred on the mean of the valid kept points, divided by pos_scale.
+        formula: "p_i = (x_i - mean_valid(x)) / pos_scale"
+        shape: [B, T, 3]
+        trace: {module: matcher.embed.tokenizer.blocks.0, io: in, index: 1}
+      - name: Point embedding
+        text: MLP 8 -> dim -> dim with GELU.
+        formula: "x_i = W2 GELU(W1 f_i)"
+        shape: [B, T, dim]
+        trace: {module: matcher.embed.tokenizer.embed, io: out}
+      - name: kNN relative positions
+        text: Each token looks at its K_m nearest valid tokens (all tokens when there are at most k).
+        formula: "d_ij = p_i - p_j,  j in kNN_k(p_i)"
+        shape: [B, T, K_m, 3]
+        trace: {module: matcher.embed.tokenizer.blocks.0.attn.theta, io: in}
+      - name: Relation
+        text: Subtraction relation in width R, plus a position term.
+        formula: "r_ij = phi(q_i) - psi(k_j) + theta_r(GELU(W d_ij))"
+        shape: [B, T, K_m, R]
+        trace: {module: matcher.embed.tokenizer.blocks.0.attn.gamma.0, io: in}
+      - name: Attention weights
+        text: MLP gamma gives one logit per group; softmax over the neighbours, masked neighbours get weight 0.
+        formula: "w_ij = softmax_j gamma(r_ij)"
+        shape: [B, T, K_m, G]
+        trace: {module: matcher.embed.tokenizer.blocks.0.attn.gamma, io: out}
+      - name: Values
+        text: Linear values, split into G groups of dim / G channels that share one weight.
+        formula: "v_j = alpha(x_j)"
+        shape: [B, T, dim]
+        trace: {module: matcher.embed.tokenizer.blocks.0.attn.alpha, io: out}
+      - name: Point Transformer blocks x depth
+        text: Weighted sum of values and positional values, linear layer, residual.
+        formula: "x_i <- x_i + W_o sum_j w_ij (v_j + theta_v(h_ij))"
+        shape: [B, T, dim]
+        trace: {module: matcher.embed.tokenizer.blocks.0, io: out}
+      - name: Masked mean pooling
+        text: Average over the valid tokens.
+        formula: "g = sum_i m_i x_i / sum_i m_i"
+        shape: [B, dim]
+        trace: {module: matcher.embed.head, io: in}
+      - name: e_touch
+        text: LayerNorm and linear.
+        formula: "e_touch = W LN(g) + b"
+        shape: [B, dim]
+        trace: {module: matcher.embed.head, io: out}
+
+  matcher.embed.latent:
+    when: {matcher: latent}
+    title: Matcher, embed (z_touch tokens)
+    class: tacfind.networks.matcher.TouchEmbed + LatentTokenizer
+    config: matcher.tokenizer
+    purpose: >-
+      Splits z_touch into T position-free tokens (keys and values of the confidence cross-attention) and pools
+      them into e_touch, the contrastive embedding of what is being touched.
+    inputs:
+      - {name: z_touch, shape: [B, dim], means: output of the spatial-temporal encoder}
+    outputs:
+      - {name: tokens, shape: [B, T, dim], means: touch tokens}
+      - {name: e_touch, shape: [B, dim], means: contrastive touch embedding}
+    steps:
+      - name: Split
+        text: One linear layer to n_tokens x dim.
+        formula: "s = W z_touch + b"
+        shape: [B, "T * dim"]
+        trace: {module: matcher.embed.tokenizer.split, io: out}
+      - name: Tokens
+        text: Reshaped to T tokens, each LayerNorm-ed.
+        formula: "u_i = LN(s[i dim : (i+1) dim])"
+        shape: [B, T, dim]
+        trace: {module: matcher.embed.tokenizer.norm, io: out}
+      - name: Mean pooling
+        text: Average over the T tokens (all valid).
+        formula: "g = mean_i u_i"
+        shape: [B, dim]
+        trace: {module: matcher.embed.head, io: in}
+      - name: e_touch
+        text: LayerNorm and linear.
+        formula: "e_touch = W LN(g) + b"
+        shape: [B, dim]
+        trace: {module: matcher.embed.head, io: out}
+
+  matcher.embed.latent_head:
+    when: {matcher: latent_head}
+    title: Matcher, embed (z_touch as estimated points)
+    class: tacfind.networks.matcher.TouchEmbed + LatentHeadTokenizer
+    config: matcher.tokenizer
+    purpose: >-
+      Reads the first 3K values of z_touch as K estimated contact points (supervised by the Chamfer loss against
+      the real contacts) and the rest as their features; self-attention among them gives the touch tokens.
+    inputs:
+      - {name: z_touch, shape: [B, dim], means: output of the spatial-temporal encoder}
+    outputs:
+      - {name: tokens, shape: [B, T, dim], means: touch tokens (T = K)}
+      - {name: e_touch, shape: [B, dim], means: contrastive touch embedding}
+      - {name: est_points, shape: [B, T, 3], means: estimated contact points (m, centred), for the Chamfer loss}
+    steps:
+      - name: Estimated points
+        text: z_touch[:3K] reshaped to K points and centred (only relative geometry is meaningful).
+        formula: "p_k = z[3k : 3k+3] - mean_k(.)"
+        shape: [B, T, 3]
+        trace: {module: matcher.embed.tokenizer.embed, io: in}
+      - name: Feature part
+        text: The remaining dim - 3K values of z_touch.
+        formula: "z[3K:]"
+        shape: [B, "dim - 3 * T"]
+        trace: {module: matcher.embed.tokenizer.feat, io: in}
+      - name: Point features
+        text: Linear to K x dim, plus an MLP 3 -> dim -> dim of the position.
+        formula: "x_k = (W z[3K:])_k + MLP(p_k)"
+        shape: [B, T, dim]
+        trace: {module: matcher.embed.tokenizer.embed, io: out}
+      - name: Attention weights
+        text: Grouped vector self-attention among all K points (no kNN, K is small).
+        formula: "w_kl = softmax_l gamma(phi(x_k) - psi(x_l) + theta_r(h_kl))"
+        shape: [B, T, K_m, G]
+        trace: {module: matcher.embed.tokenizer.blocks.0.attn.gamma, io: out}
+      - name: Point Transformer blocks x depth
+        text: Weighted values, linear, residual.
+        formula: "x_k <- x_k + W_o sum_l w_kl (alpha(x_l) + theta_v(h_kl))"
+        shape: [B, T, dim]
+        trace: {module: matcher.embed.tokenizer.blocks.0, io: out}
+      - name: Estimated points in metres
+        text: Positions times pos_scale, returned for the Chamfer loss.
+        formula: "est = p * pos_scale"
+        shape: [B, T, 3]
+        trace: {module: matcher.embed, io: out, index: 3}
+      - name: Mean pooling
+        text: Average over the K tokens.
+        formula: "g = mean_k x_k"
+        shape: [B, dim]
+        trace: {module: matcher.embed.head, io: in}
+      - name: e_touch
+        text: LayerNorm and linear.
+        formula: "e_touch = W LN(g) + b"
+        shape: [B, dim]
+        trace: {module: matcher.embed.head, io: out}
+
+  matcher.confidence:
+    title: Matcher, confidence
+    class: tacfind.networks.matcher.Confidence
+    config: matcher
+    purpose: >-
+      Asks, for each target token, how much of it the touch evidence explains: vector cross-attention with
+      queries = target tokens and keys / values = touch tokens, without a position term (the two clouds live in
+      different frames). The differences are pooled into z_diff and a confidence that the touched object is the
+      target.
+    inputs:
+      - {name: target tokens, shape: [B, M, dim], means: from the target encoder (queries)}
+      - {name: touch tokens, shape: [B, T, dim], means: from matcher.embed (keys and values), with a mask}
+    outputs:
+      - {name: z_diff, shape: [B, dim], means: pooled target-vs-touch difference (policy input)}
+      - {name: confidence, shape: [B], means: "sigmoid of the logit, in [0, 1]"}
+    steps:
+      - name: Normalise target tokens
+        formula: "t_m = LN(target_m)"
+        shape: [B, M, dim]
+        trace: {module: matcher.confidence.norm_target, io: out}
+      - name: Normalise touch tokens
+        formula: "u_j = LN(touch_j)"
+        shape: [B, T, dim]
+        trace: {module: matcher.confidence.norm_touch, io: out}
+      - name: Relation
+        text: Every target token against every touch token, in width R.
+        formula: "r_mj = phi(t_m) - psi(u_j)"
+        shape: [B, M, T, R]
+        trace: {module: matcher.confidence.cross.gamma.0, io: in}
+      - name: Attention weights
+        text: One weight per group, softmax over the touch tokens; padded touch tokens get weight 0.
+        formula: "w_mj = softmax_j gamma(r_mj)"
+        shape: [B, M, T, G]
+        trace: {module: matcher.confidence.cross.gamma, io: out}
+      - name: Values
+        formula: "v_j = alpha(u_j)"
+        shape: [B, T, dim]
+        trace: {module: matcher.confidence.cross.alpha, io: out}
+      - name: Explained target
+        text: What the touch explains of each target token (zero when there is no touch token).
+        formula: "e_m = sum_j w_mj v_j  (per group)"
+        shape: [B, M, dim]
+        trace: {module: matcher.confidence.cross, io: out}
+      - name: Difference features
+        formula: "d_m = [t_m, e_m, t_m - e_m]"
+        shape: [B, M, "3 * dim"]
+        trace: {module: matcher.confidence.diff, io: in}
+      - name: Difference MLP
+        text: MLP 3 dim -> dim -> dim with LayerNorm and GELU, per target token.
+        formula: "q_m = MLP(d_m)"
+        shape: [B, M, dim]
+        trace: {module: matcher.confidence.diff, io: out}
+      - name: z_diff
+        text: Mean over the M target tokens.
+        formula: "z_diff = mean_m q_m"
+        shape: [B, dim]
+        trace: {module: matcher.confidence.head, io: in}
+      - name: Confidence
+        text: Linear logit; the confidence is its sigmoid.
+        formula: "c_hat = sigmoid(w . z_diff + b)"
+        shape: [B, 1]
+        trace: {module: matcher.confidence.head, io: out}
+
+  policy:
+    title: Exploration and retrieval policy
+    class: tacfind.networks.policy.ActorCritic
+    config: policy
+    purpose: >-
+      Asymmetric actor-critic. The actor sees what the real robot has: o_t, z_touch, z_diff and the confidence.
+      The critic also gets the privileged simulator state during training. Actions are increments of the 28
+      joint targets.
+    inputs:
+      - {name: o_t, shape: [B, D_o], means: current observation}
+      - {name: "z_touch, z_diff", shape: [B, dim], means: latents (z_diff and confidence detached in staged / joint)}
+      - {name: confidence, shape: [B], means: matcher confidence}
+      - {name: s_priv, shape: [B, P], means: privileged state, critic only}
+    outputs:
+      - {name: action distribution, shape: [B, A], means: Gaussian mean and std per joint}
+      - {name: value, shape: [B], means: state value}
+    steps:
+      - name: Normalise latents
+        text: The latents have no fixed scale, unlike the normalised o_t.
+        formula: "l = LN([z_touch, z_diff])"
+        shape: [B, "2 * dim"]
+        trace: {module: policy.norm, io: out}
+      - name: Actor input
+        formula: "x = [o_t, l, c_hat]"
+        shape: [B, "D_o + 2 * dim + 1"]
+        trace: {module: policy.actor, io: in}
+      - name: First hidden layer
+        text: Linear and GELU; the hidden widths are policy_hidden.
+        formula: "h_1 = GELU(W_1 x)"
+        shape: [B, F_a]
+        trace: {module: policy.actor.0, io: out}
+      - name: Action mean
+        text: Last layer initialised at 0.01 scale, so the first actions are near zero.
+        formula: "mu = MLP_actor(x)"
+        shape: [B, A]
+        trace: {module: policy.actor, io: out}
+      - name: Action distribution
+        text: State-independent learned log standard deviation; actions are sampled when collecting, the mean when deterministic.
+        formula: "a ~ N(mu, diag(exp(2 log_std))),  log pi(a) = sum_i log N(a_i; mu_i, sigma_i)"
+        shape: [A]
+        trace: {param: policy.log_std}
+      - name: Critic input
+        text: The actor input plus the privileged state.
+        formula: "x_c = [x, s_priv]"
+        shape: [B, "D_o + 2 * dim + 1 + P"]
+        trace: {module: policy.critic, io: in}
+      - name: Value
+        text: Critic MLP with the same hidden widths; squeezed to (B).
+        formula: "V = MLP_critic(x_c)"
+        shape: [B, 1]
+        trace: {module: policy.critic, io: out}
+
+losses:
+  contrastive:
+    title: Contrastive (InfoNCE)
+    source: tacfind.train.losses.contrastive_loss
+    formula: "L = -mean_valid log softmax_j(cos(e_touch, z_j) / temperature)[touched]"
+    text: >-
+      The touch embedding must pick the touched object out of the whole training library (z_j = z_target of every
+      library object, encoded under a random rotation when loss.augment_rotate). Rows with no contact are skipped.
+      Logs acc/contrastive_top1.
+  uniform:
+    title: Uniformity
+    source: tacfind.train.losses.uniformity_loss
+    formula: "L = log mean_{i != j} exp(-t |z_i - z_j|^2),  z normalised,  t = loss.uniform_t"
+    text: Spreads the library embeddings over the sphere; without it they collapse under the contrastive loss alone.
+  confidence:
+    title: Confidence (BCE)
+    source: tacfind.train.losses.confidence_loss
+    formula: "L = BCE(c_hat_logit, c_t)"
+    text: >-
+      c_t is the simulator's label: coverage = fraction of the target surface touched in the last H steps divided by
+      coverage.full_at, clipped to 1; binary = a fingertip touches the target now.
+  chamfer:
+    title: Chamfer
+    source: tacfind.train.losses.chamfer_loss
+    formula: "L = mean_k min_l |a_k - b_l|^2 + mean_l min_k |a_k - b_l|^2  (centred, in pos_scale units)"
+    text: Only with matcher = latent_head; supervises the K estimated points with the real contact points of the window.
+  ppo:
+    title: PPO
+    source: tacfind.train.losses.ppo_loss
+    formula: "L = -min(r A, clip(r, 1 - eps, 1 + eps) A) + value_coef * 0.5 (V - R)^2 - entropy_coef * H[pi],  r = pi / pi_old"
+    text: >-
+      Advantages A from GAE (ppo.gamma, ppo.lam), normalised per minibatch. The epochs of an update stop early when
+      the mean approximate KL exceeds ppo.target_kl.
+
+# Observation groups (configs/env/bin.yaml): size of each, in the order of env.obs_groups.
+obs_groups:
+  arm_q: 6
+  arm_qd: 6
+  hand_q: 22
+  hand_qd: 22
+  q_target: 28
+  tcp_pose: 9
+  tcp_wrench: 6
+  tip_wrench: 30
+  tip_force: 5
+  tip_contact: 5
+  tip_point: 15
+  tip_normal: 15
+  prev_action: 28
