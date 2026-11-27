@@ -20,3 +20,6 @@ wandb/
 
 # MuJoCo warning log written to the working directory
 MUJOCO_LOG.TXT
+
+# generated report page and its videos (published as an artifact; rebuilt by scripts/report.py)
+docs/report/build/
