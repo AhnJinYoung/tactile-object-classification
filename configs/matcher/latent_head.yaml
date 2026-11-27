@@ -1,0 +1,9 @@
+# Matcher whose touch side is z_touch read as K estimated contact points (supervised by an auxiliary Chamfer loss).
+_target_: tacfind.networks.matcher.CrossModalMatcher
+dim: ${dim}             # token width
+tokenizer:
+  _target_: tacfind.networks.matcher.LatentHeadTokenizer
+  dim: ${dim}           # width of z_touch (must exceed 3 * n_points) and of the tokens
+  depth: ${depth}       # self-attention blocks among the estimated points
+  n_points: 8           # K estimated contact points = first 3K dims of z_touch
+  pos_scale: 0.1        # metres per unit of the estimated coordinates

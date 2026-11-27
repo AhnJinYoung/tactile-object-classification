@@ -1,0 +1,4 @@
+# @package _global_
+# Large networks: capacity check.
+dim: 256   # shared latent width (z_touch, tokens, z_target, z_diff)
+depth: 3   # blocks / layers per module (per stage in the target encoder)

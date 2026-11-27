@@ -1,0 +1,5 @@
+# Per-step embedding -> residual 1-D convolutions over time -> masked mean pool. obs_dim and history are passed by TacFind.
+_target_: tacfind.networks.touch_encoder.CNN1dEncoder
+dim: ${dim}       # width of z_touch and of the conv channels
+depth: ${depth}   # conv layers
+kernel: 5         # temporal kernel size (odd), in steps

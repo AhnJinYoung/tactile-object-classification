@@ -1,0 +1,7 @@
+# Matcher whose touch side is z_touch split into a few position-free tokens.
+_target_: tacfind.networks.matcher.CrossModalMatcher
+dim: ${dim}             # token width
+tokenizer:
+  _target_: tacfind.networks.matcher.LatentTokenizer
+  dim: ${dim}           # width of z_touch and of the tokens
+  n_tokens: 8           # tokens z_touch is split into

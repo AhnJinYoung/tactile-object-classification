@@ -1,0 +1,4 @@
+# @package _global_
+# Small networks: fastest, for sweeps and debugging.
+dim: 64    # shared latent width (z_touch, tokens, z_target, z_diff)
+depth: 1   # blocks / layers per module (per stage in the target encoder)

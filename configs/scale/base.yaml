@@ -1,0 +1,4 @@
+# @package _global_
+# Default networks: cheap enough for many-environment RL rollouts.
+dim: 128   # shared latent width (z_touch, tokens, z_target, z_diff)
+depth: 2   # blocks / layers per module (per stage in the target encoder)

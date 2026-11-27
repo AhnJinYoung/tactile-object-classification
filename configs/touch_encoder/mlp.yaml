@@ -1,0 +1,4 @@
+# Vanilla MLP over the flattened observation window. obs_dim and history are passed by TacFind.
+_target_: tacfind.networks.touch_encoder.MLPEncoder
+dim: ${dim}       # width of z_touch
+depth: ${depth}   # hidden layers (width 2 * dim)

@@ -1,0 +1,7 @@
+# Point Transformer over the target cloud -> M target tokens + z_target.
+_target_: tacfind.networks.target_encoder.TargetEncoder
+dim: ${dim}         # token width
+depth: ${depth}     # Point Transformer blocks per stage
+stages: [128, 64]   # points kept by each transition-down; the last entry is M (target tokens)
+k: 16               # kNN neighbourhood size
+pos_scale: 0.1      # metres per network coordinate unit (brings object coordinates to ~1)

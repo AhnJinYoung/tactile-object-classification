@@ -1,0 +1,9 @@
+# Matcher whose touch side is the tactile contact point cloud (Point Transformer self-attention among valid points).
+_target_: tacfind.networks.matcher.CrossModalMatcher
+dim: ${dim}             # token width
+tokenizer:
+  _target_: tacfind.networks.matcher.PointTokenizer
+  dim: ${dim}           # token width
+  depth: ${depth}       # self-attention blocks among touch points
+  k: 16                 # kNN neighbourhood size
+  pos_scale: 0.1        # metres per network coordinate unit
