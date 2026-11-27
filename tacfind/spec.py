@@ -15,8 +15,9 @@ class EnvSpec:
         act_dim: action size (28 = 6 arm + 22 hand joint-target increments).
         priv_dim: size of the privileged simulator state that only the critic sees (0 = none).
         n_tips: number of fingertip tactile sensors (5 on a Sharpa Wave).
-        pt_dim: features of one fingertip contact point: position in the robot base frame (3, m), outward normal of
-            the touched surface (3, unit), contact force magnitude (1, N).
+        pt_dim: features of one fingertip contact point as the environment emits it: position in the robot base
+            frame (3, m), outward normal of the touched surface (3, unit), contact force magnitude (1, N). The
+            windowed tactile point cloud given to the matcher appends an age channel, so its points have pt_dim + 1.
     """
 
     obs_dim: int

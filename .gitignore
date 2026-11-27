@@ -17,3 +17,6 @@ third_party/
 wandb/
 *.pt
 .scratch/
+
+# MuJoCo warning log written to the working directory
+MUJOCO_LOG.TXT
