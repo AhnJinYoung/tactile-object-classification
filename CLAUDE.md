@@ -38,9 +38,13 @@ and the experiment plan.
 
 ## Runs
 
-Every run writes only to `runs/<YYYYMMDD-HHMMSS>_<name>/` (resolved config, git commit, metrics, videos, figures,
-checkpoints, a short note) and appends one row to `runs/index.csv`. The report in `docs/report/` is generated from
-those files; nothing in it is typed by hand except the comments.
+Every run writes only to its own `runs/<YYYYMMDD-HHMMSS>_<name>/`: resolved config, git commit, `metrics.jsonl`,
+`summary.json`, videos, figures, checkpoints. Runs start in parallel, so there is no shared index file; any table of
+runs is built by scanning the `summary.json` files. The report page is generated from those files by
+`scripts/report.py`; nothing in it is typed by hand except the brief comments in `docs/report/notes.yaml`.
+
+Entry points: `scripts/train.py` (one run; presets with `+experiment=<name>`), `scripts/launch.py` (a sweep file
+over the available GPUs), `scripts/evaluate.py`, `scripts/view.py` (live browser viewer), `scripts/report.py`.
 
 ## Git
 
