@@ -18,6 +18,9 @@ and the experiment plan.
    batched physics (MuJoCo Warp), observations, labels, rewards and learning are all tensors on that device, with no
    per-environment Python loops and no CPU round trips in the step path. `scripts/launch.py` fills the available GPUs
    with runs. Never assume a GPU model or memory size; sizes come from the config.
+7. **After every change or finished experiment, update the "Current state" section of `README.md`** in this fixed
+   format: *Previous work done* (only the most recent one: what / why / results), *Ongoing* (what / why / predicted
+   outcomes), *Future works* (a small table). Results are measured facts; predictions are labelled as predictions.
 
 ## Code conventions
 
