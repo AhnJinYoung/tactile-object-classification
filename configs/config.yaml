@@ -1,0 +1,17 @@
+# Root config: one experiment = this file + command-line overrides.
+#   python scripts/train.py touch_encoder=transformer matcher=latent history=10 name=E012_tf_latent_H10
+#   python scripts/train.py -m history=10,30,60 scale=small,base        # sweep: one run per combination
+defaults:
+  - env: bin                           # MuJoCo scene, observations, labels, reward
+  - touch_encoder: cnn1d               # spatial-temporal encoder: mlp | cnn1d | transformer
+  - target_encoder: point_transformer  # target point cloud -> target tokens + z_target
+  - matcher: points                    # touch-side input of the Point Transformer matcher: points | latent | latent_head
+  - policy: mlp                        # actor-critic
+  - train: staged                      # training scheme: staged | joint | end_to_end
+  - scale: base                        # network size: small | base | large (sets dim and depth)
+  - _self_
+
+name: dev        # run name -> runs/<timestamp>_<name>/
+seed: 0
+device: auto     # auto = cuda when available, else cpu
+history: 30      # H: past steps seen by the spatial-temporal encoder and kept in the tactile point cloud
