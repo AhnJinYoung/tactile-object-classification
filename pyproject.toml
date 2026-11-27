@@ -1,0 +1,30 @@
+[project]
+name = "tacfind"
+version = "0.1.0"
+description = "Tactile target finding: a blind UR10e + Sharpa Wave hand identifies a target object in a cluttered bin by touch and pulls it out"
+requires-python = ">=3.12,<3.13"
+# Install the torch build that matches the machine first (CPU-only: --index-url https://download.pytorch.org/whl/cpu).
+dependencies = [
+    "torch",
+    "mujoco==4.0.*",
+    "numpy",
+    "hydra-core>=1.3",
+    "tensorboard",
+    "imageio",
+    "imageio-ffmpeg",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+wandb = ["wandb"]
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["tacfind*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

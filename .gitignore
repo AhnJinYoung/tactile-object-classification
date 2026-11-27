@@ -1,0 +1,19 @@
+# secrets (never commit: this repository is public)
+.env
+
+# python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+
+# outputs: runs, checkpoints, data, third-party assets fetched by scripts/fetch_assets.py
+runs/
+outputs/
+multirun/
+data/
+third_party/
+wandb/
+*.pt
+.scratch/
