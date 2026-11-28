@@ -90,7 +90,7 @@ def _quat_mul(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 
 def add_table(spec: mujoco.MjSpec, cfg) -> None:
-    """Table (top at `table.top_z`, one long edge next to the robot base) and a floor plane for objects that fall off."""
+    """Table (top at `table.top_z`, a long edge at the robot base) and a floor plane for objects that fall off."""
     t, world = cfg.table, spec.worldbody
     sx, sy = np.asarray(t.size) / 2
     kw = dict(contype=STATIC, conaffinity=OBJECT, friction=[t.friction, 0.005, 0.0001])  # objects win, see add_object

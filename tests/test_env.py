@@ -77,7 +77,7 @@ def test_override_and_world_state(env):
     assert torch.allclose(env.prev_action[1], torch.full((28,), 0.5)) and (env.prev_action[0] == 0).all()
     env.override(1, None)
     st = env.world_state(1)
-    assert st["qpos"].shape == (env.mjm.nq,) and st["pts"].shape == (5, 3) and st["active_lib"].shape == (4,)
+    assert st["qpos"].shape == (env.mjm.nq,) and st["pts"].shape == (5, 3) and st["active_lib"].shape == (env.k,)
     assert int(st["target_lib"]) in env.lib_ids.tolist()
     assert st["q_target"].shape == (28,) and st["qvel"].shape == (env.mjm.nv,)
 
@@ -125,3 +125,53 @@ def test_domain_randomisation_per_world(env):
     assert not torch.allclose(masses[0], masses[1])  # each world draws its own
     t_lo, t_hi = env.cfg.randomize.force_threshold
     assert ((env.randomizer.threshold >= t_lo) & (env.randomizer.threshold <= t_hi)).all()
+
+
+def test_explorer_touches_objects(cfg):
+    e = BinEnv(cfg, N, history=30, device="cpu", seed=1)
+    ex = Explorer(e, seed=0)
+    assert ex.ik_error < 1e-3
+    obs, contact, conf = e.reset(), 0, 0.0
+    for _ in range(150):
+        obs, reward, _, info = e.step(ex.act(obs))
+        assert torch.isfinite(obs["o"]).all() and torch.isfinite(reward).all()
+        contact += int(obs["pts_valid"].any(1).sum())
+        conf = max(conf, float(info["conf_gt"].max()))
+    assert contact > 0 and conf > 0 and e.sim.health()["overflow"] == 0
+    e.sim.pool.shutdown()
+
+
+@pytest.mark.slow
+def test_warp_matches_cpu_backend(cfg):
+    """Same model, state, controls and applied forces, 40 substeps (hand in the air, objects resting): close."""
+    from tacfind.envs.sim import WarpSim
+
+    cfg.randomize.enabled = False  # both backends on the nominal model
+    e = BinEnv(cfg, 1, history=30, device="cpu", seed=0)
+    e.reset()
+    qpos, qvel = e.sim.qpos.clone(), torch.zeros(1, e.mjm.nv)
+    sims = [CpuSim(e.mjm, 1), WarpSim(e.mjm, 1, "cpu", nconmax=cfg.nconmax, njmax=cfg.njmax)]
+    for s in sims:
+        s.set_state(torch.ones(1, dtype=torch.bool), qpos, qvel)
+        s.set_ctrl(e.q_target + torch.linspace(-0.05, 0.05, 28))  # a small move of every joint
+        s.set_xfrc(e.sim.xfrc_applied)
+        s.step(40)
+    cpu, warp = (s.qpos.cpu() for s in sims)
+    assert torch.allclose(cpu[:, e.qadr], warp[:, e.qadr], atol=2e-3)  # robot joints, rad
+    on_table = e.active[0][e.slot_valid[0]]
+    obj = (e.obj_qadr[on_table][:, None] + torch.arange(3)).flatten()
+    assert torch.allclose(cpu[:, obj], warp[:, obj], atol=2e-3)  # positions of the objects on the table, m
+    e.sim.pool.shutdown()
+
+
+@pytest.mark.slow
+def test_warp_env_end_to_end(cfg):
+    cfg.sim, cfg.bank_size, cfg.settle_time = "warp", 2, 0.5
+    e = BinEnv(cfg, 2, history=30, device="cpu", seed=0)
+    ex = Explorer(e, seed=0)
+    obs = e.reset()
+    for _ in range(10):
+        obs, reward, done, info = e.step(ex.act(obs))
+        assert torch.isfinite(obs["o"]).all() and torch.isfinite(reward).all()
+        assert obs["o"].shape == (2, e.spec.obs_dim) and info["conf_gt"].shape == (2,)
+    assert e.sim.health()["overflow"] == 0

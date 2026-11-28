@@ -172,7 +172,9 @@ class BinEnv:
         self.target_z, self.prev_action = tz, action
         done = info["success"] | info["wrong_pick"] | info["target_dropped"] | info["timeout"]
         self._reset(done)  # masked: no host sync; the extra forward also refreshes the reset worlds' readings
-        r = self._read()
+        fresh = self.tactile.read(self.sim, self.obj_slot, self.k, self.randomizer.threshold, self._noise(), self.gen)
+        # finished worlds take the new episode's reading; the others keep the one their labels came from
+        self.reading = r = {k: torch.where(done.view(-1, *[1] * (v.dim() - 1)), fresh[k], v) for k, v in r.items()}
         self.last = {**info, "reward": reward, "done": done}
         return self._obs(r, first=done), reward.float(), done, info
 
@@ -304,10 +306,13 @@ class BinEnv:
 
     def _read(self) -> dict:
         """Tactile readings of all worlds (kept for `world_state`), with the randomised threshold and noise."""
-        rnd = self.cfg.randomize
-        self.reading = self.tactile.read(self.sim, self.obj_slot, self.k, self.randomizer.threshold,
-                                         rnd.force_noise if rnd.enabled else 0.0, self.gen)
+        self.reading = self.tactile.read(self.sim, self.obj_slot, self.k, self.randomizer.threshold, self._noise(),
+                                         self.gen)
         return self.reading
+
+    def _noise(self) -> float:
+        """Std of the tactile force noise, N (0 without domain randomisation)."""
+        return self.cfg.randomize.force_noise if self.cfg.randomize.enabled else 0.0
 
     def _labels(self, r: dict) -> tuple[dict, torch.Tensor]:
         """Privileged simulator truth after a step (updates the coverage, hold and off-table memories).
@@ -384,7 +389,7 @@ class BinEnv:
         }
         return {
             "o": torch.cat([groups[g]() for g in self.cfg.obs_groups], 1).float(),
-            "pts": torch.cat([r["point_base"], r["normal_base"], r["force"][..., None]], -1).float(),
+            "pts": torch.cat([r["point_base"], r["normal_base"], (r["force"] * r["valid"])[..., None]], -1).float(),
             "pts_valid": r["valid"].clone(),
             "first": first.clone(),
             "target": self.lib_ids[self.active_target()],
