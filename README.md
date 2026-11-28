@@ -1,54 +1,44 @@
 # tactile-object-classification
 
-A blind robot (UR10e arm + Sharpa Wave tactile hand) reaches into an occluded bin, works out by touch alone which
-object is the target, and pulls it out. Simulation is MuJoCo; physics, observations and learning run batched on one
-GPU per experiment, so many experiments can run in parallel.
+A blind robot (UR10e arm + Sharpa Wave tactile hand) works out by touch alone which object on a table is the target,
+then lifts it. Simulation is MuJoCo; physics, observations and learning run batched on one GPU per experiment, so
+many experiments can run in parallel.
+
+Report page (results and interactive architecture): https://claude.ai/artifact/EpoKr3C6nwHUPQXc3pWKA3
 
 ## Current state
 
-_Updated after every change or finished experiment. Last update: 2026-11-27._
+_Updated after every change or finished experiment. Last update: 2026-11-28._
 
 ### Previous work done
 
-- **What:** The GPU-batched environment (`tacfind/envs/`): MuJoCo Warp physics with every world on one device and a
-  plain-MuJoCo reference backend for local tests; one model that holds the whole object library, with the objects
-  not in play parked out of the way; resets from a bank of settled bin states; batched fingertip tactile readings;
-  the confidence labels (contact ratio and binary); a scripted touch explorer; rendering of one world. In the same
-  step the networks got two fixes: a memory-lean attention with a cap on touch tokens, and a uniformity loss.
-- **Why:** Experiments have to run in parallel on NVIDIA GPUs, one experiment per GPU, so physics, observations and
-  labels must all be tensors on that device. The first network version needed too much memory for thousands of
-  worlds, and its object embeddings collapsed under plain contrastive training.
-- **Results:** 16 environment tests and 44 network tests pass on CPU. MuJoCo Warp (on its CPU device) matches CPU
-  MuJoCo to about 4e-6 rad over a short rollout. The observation has 192 values per step. With the scripted
-  explorer, fingertips are in contact in 12.6 % of steps and touch 2.25 distinct objects per episode; the
-  contact-ratio label averages 0.21 while in contact and peaks at 0.50. The explorer never managed to lift an object
-  out of the bin. Matcher memory in the worst case fell from 52.9 MB to 2.0 MB per sample. On a synthetic check
-  (3 seeds) the uniformity loss keeps the object embeddings apart and gives 0.59 top-1 accuracy against 0.36 without
-  it (chance 0.25); the lean attention learns more slowly than the original (0.59 against 0.75). Nothing has run on
-  a GPU yet.
+- **What:** The scene was rebuilt: no bin, an 80 x 180 cm table with the robot at the middle of a long edge, 3 to 8
+  objects scattered in the reachable 45 x 60 cm zone, and real YCB object meshes (21 objects, 16 for training and
+  5 held out) with measured masses, friction per material and per-world randomisation of mass, friction and centre of
+  mass. Success is lifting the target 10 cm and holding it 1 s; the reward is sparse by default. Merged in the same
+  step: the staged trainer, the multi-GPU launcher, the server preflight check, the live browser viewer and the
+  report page source.
+- **Why:** The task is searching a table, not a bin, and realistic object masses and contact parameters narrow the
+  gap to the real robot. The trainer and launcher are what the planned experiments run on.
+- **Results:** 100 unit tests pass on CPU. A scripted lift check on each object alone succeeded in 23 of 63 trials
+  with the official Sharpa finger gains and 15 of 63 with torque-limit gains; fingertip press force reaches 14 N at
+  moderate flexion, and the heaviest object (171 g) was held, so failures come from the fixed scripted grasp, not
+  from weak fingers. The scripted explorer has fingertip contact in 17 % of steps and almost never lifts an object
+  in clutter. Nothing has run on a GPU yet.
 
 ### Ongoing
 
-- **What:** (1) The trainer: configurable stages (contrastive, confidence, PPO on the encoder, PPO on the policy),
-  PPO, run directories with intermediate videos and curves, optional Weights & Biases, and `scripts/launch.py`,
-  which fills the available GPUs with queued runs. (2) The live viewer: MuJoCo Studio in the browser, served by the
-  simulation process and reached through an SSH tunnel. (3) A grasp feasibility check: can the simulated hand lift
-  each object family at all, with the official finger gains and with torque-limit gains.
-- **Why:** The trainer and launcher are what the planned experiments run on. The viewer lets a person watch and
-  drive the simulation on the GPU server. The feasibility check comes before any GPU time is spent on
-  reinforcement learning, because the explorer could not hold a single object.
-- **Predicted outcomes:** Every stage runs for a few iterations in unit tests on CPU, and a sweep file starts one
-  run per GPU. The viewer's server side works here; its browser side still has to be checked by a person. The
-  feasibility check either shows that lifting works with stronger finger gains or names what has to change
-  (friction, mass, size range, posture).
+- **What:** Bringing the report page in line with the table scene, and getting access to the GPU servers.
+- **Why:** The page still described the bin. No training can start before a GPU is reachable and free.
+- **Predicted outcomes:** The page shows the new scene and still no results. Once a GPU is available: a preflight
+  check, then a smoke test of every stage, which is expected to surface GPU-only problems.
 
 ### Future works
 
 | Step | What | Waits for |
 |---|---|---|
-| Report: results tab | One page collecting every run: comment, rollout video, metric curves | trainer |
-| Report: architecture tab | The architecture drawn in the style of the original figure, updated with the decisions made; a dropdown picks the experiment; hyperparameters are editable inside the blocks and export as a config YAML; clicking a module shows its input shapes and its computation step by step | trainer (experiment presets) |
 | GPU smoke test | Every stage for a few iterations; measure throughput, memory per world and the cost of the library size | GPU access and approval |
-| Baseline E001 | Staged training, tactile-point-cloud matcher, 1-D CNN encoder, H = 30, contact-ratio label | smoke test |
+| Baseline E001, stages 1-2 | Contrastive and confidence stages: tactile-point-cloud matcher, 1-D CNN encoder, H = 30, contact-ratio label | smoke test |
+| Stages 3-4 | PPO with the sparse reward; which modules train in each stage is decided after stages 1-2 work | stages 1-2 |
 | Experiment axes | Matcher input (points / latent / latent header), training scheme, encoder type, H, label type, network scale, attention width | baseline |
-| Ideas to test later | Pretraining the matcher on synthetic touch patches without physics; rotation-invariant point features; a tactile deformation map instead of contact points | baseline results |
+| Ideas to test later | Reward shaping if the sparse reward does not converge; task-space arm control; pretraining the matcher on synthetic touch patches; rotation-invariant point features; a tactile deformation map instead of contact points | baseline results |
