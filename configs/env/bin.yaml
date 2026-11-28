@@ -21,15 +21,23 @@ substeps: 25                   # physics steps per control step: control period 
 timeout: 15.0                  # episode length limit, s
 
 # --- robot -------------------------------------------------------------------------------------------------------
-arm_home: [-0.1537, -1.5905, 2.121, -2.1013, -1.5708, -0.1537]   # tool-down, tcp 0.245 m above the zone centre
-arm_range: [1.2, 1.0, 1.4, 1.4, 1.5, 2.0]   # allowed |q - home| per arm joint, rad: covers the zone below with
-                                            # both explorer orientations (IK reachability scan)
+# Tool down, tcp 0.245 m above the zone centre, fingers down; the palm faces a long edge of the table: -x, away from
+# the robot base. Only wrist 3 turns (by about -pi/2 from the earlier palm-along-the-table pose, +y:
+# [-0.1537, -1.5905, 2.121, -2.1013, -1.5708, -0.1537]) with the mount as designed; the other joints move a little to
+# keep the tcp in place (it sits 3 cm off the flange axis). Palm towards the robot (+x):
+# [-0.1934, -1.5452, 2.0755, -2.1011, -1.5708, 1.3774], but then the palm-down pull pose is out of reach for most of
+# the zone (the wrist would fold into the forearm and the table), so pulls fail.
+arm_home: [-0.2137, -1.6484, 2.1754, -2.0978, -1.5708, -1.7845]
+arm_range: [1.2, 1.4, 2.0, 2.0, 1.5, 2.0]   # allowed |q - home| per arm joint, rad (inside the real +-360 deg; the
+                                            # elbow is also held to +-pi): covers the zone below with both explorer
+                                            # orientations (IK reachability scan: 99.5 % of the tilted lattice)
 arm_step: 0.03                 # max arm joint-target change per control step, rad (0.6 rad/s)
 hand_step: 0.041667            # max hand joint-target change per control step, rad (1/24, as in Sharpa's RL code)
 max_lead: [0.15, 0.4]          # max |target - measured| for [arm, hand] joints, rad
-hand_mount_quat: [1, 0, 0, 0]  # extra rotation hand <- flange (w x y z); identity = the flange adapter as designed
+hand_mount_quat: [1, 0, 0, 0]  # extra rotation hand <- flange (w x y z); identity = the flange adapter as designed (its
+                               # locating pin allows only this yaw on the ISO 9409-1-50-4-M6 tool flange)
 finger_gains: mjcf             # mjcf: official Sharpa MJCF gains | torque_limit: kp = real torque limit / 0.01 rad
-                               # (YCB lift check: mjcf 23/63 trials, torque_limit 15/63; see grasp_check.py)
+                               # (YCB lift check, mjcf: 51/63 trials; palm along y: mjcf 23/63, torque_limit 15/63)
 
 # --- table and object zone (base frame) ---------------------------------------------------------------------------
 table:
@@ -125,7 +133,9 @@ explorer:
   lattice_margin: 0.05         # lattice reaches this far beyond the zone, m
   z_range: [0.01, 0.33]        # lattice tcp height range, m
   p_aim: 0.8                   # probability of aiming at an object (read from the simulator) instead of a random spot
-  aim_offset: [0.02, -0.05]    # touch: tcp goal relative to the aimed object, m: puts it between fingers and thumb
+  # offsets in the palm frame (along the palm normal, lateral = up x normal, up; explorer.palm_frame): they turn
+  # with the hand, so `arm_home` alone sets the palm direction
+  aim_offset: [-0.05, -0.02]   # touch: tcp goal relative to the aimed object, m: puts it between fingers and thumb
   aim_noise: 0.02              # uniform +- noise on the aimed goal, m
   hover_z: 0.18                # tcp height while moving between objects, m
   descend_min_z: 0.045         # lowest tcp of a touch descent, m (fingertips at the table)
@@ -146,8 +156,9 @@ explorer:
   close: [1.2, -0.3, 0.8, 0.0, 0.4,  1.1, 0.0, 0.5, 0.4,  1.1, 0.0, 0.5, 0.4,  1.1, 0.0, 0.5, 0.4,
           0.1, 1.1, 0.0, 0.5, 0.4]
   close_frac: [0.5, 1.0]
-  # privileged grasp-and-lift (grasp_check.py; pull attempts): the hand tilts about the base x axis so the palm faces
-  # the table (with fingers straight down the pinch point sits 9-12 cm above the fingertips: taller than any object)
+  # privileged grasp-and-lift (grasp_check.py; pull attempts): the hand tilts about the horizontal axis across the palm
+  # so the palm faces the table (fingers straight down, the pinch point sits 9-12 cm above the fingertips: taller
+  # than any object)
   grasp_tilt: -1.2             # rad
-  grasp_shift: [-0.01, 0.02, 0.0]   # pinch point target relative to the object centre, base frame, m
+  grasp_shift: [0.02, 0.01, 0.0]   # pinch point target relative to the object centre, palm frame, m
   grasp_pre: 0.3               # descend with the hand at this fraction of `close`

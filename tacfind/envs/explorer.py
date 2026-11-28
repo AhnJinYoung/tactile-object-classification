@@ -20,10 +20,20 @@ MOVE, DESCEND, CLOSE, HOLD, PULL, OPEN, RISE = range(7)
 PHASES = ("move", "descend", "close", "hold", "pull", "open", "rise")
 
 
-def tilt_rotation(tilt: float) -> np.ndarray:
-    """Rotation (3, 3) about the base x axis by `tilt` rad (negative: the palm, which faces +y, turns to the floor)."""
+def palm_frame(rot_tcp: np.ndarray) -> np.ndarray:
+    """Palm frame (3, 3) of a fingers-down tcp rotation (3, 3), base frame: columns = palm normal (the tcp x axis,
+    horizontal), lateral (up x normal), up. Offsets in this frame turn with the hand (`arm_home` sets its yaw)."""
+    normal = rot_tcp[:, 0] * [1.0, 1.0, 0.0]
+    normal /= np.linalg.norm(normal)
+    up = np.array([0.0, 0.0, 1.0])
+    return np.column_stack([normal, np.cross(up, normal), up])
+
+
+def tilt_rotation(tilt: float, rot_tcp: np.ndarray) -> np.ndarray:
+    """Rotation (3, 3), base frame, by `tilt` rad about the horizontal axis normal x up of a fingers-down tcp rotation
+    `rot_tcp` (3, 3) (negative: the palm turns to the floor)."""
     quat, rot = np.zeros(4), np.zeros(9)
-    mujoco.mju_axisAngle2Quat(quat, np.array([1.0, 0, 0]), tilt)
+    mujoco.mju_axisAngle2Quat(quat, -palm_frame(rot_tcp)[:, 1], tilt)
     mujoco.mju_quat2Mat(rot, quat)
     return rot.reshape(3, 3)
 
@@ -57,7 +67,8 @@ def solve_lattice(env: BinEnv, tilt: float = 0.0) -> tuple[list, np.ndarray]:
     d = mujoco.MjData(m)
     d.qpos[:] = env.qpos0.cpu().numpy()
     mujoco.mj_kinematics(m, d)
-    rot_goal = tilt_rotation(tilt) @ d.site_xmat[env.tcp_site].reshape(3, 3)
+    rot_home = d.site_xmat[env.tcp_site].reshape(3, 3)
+    rot_goal = tilt_rotation(tilt, rot_home) @ rot_home
     half = np.asarray(env.cfg.zone.size) / 2 + cfg.lattice_margin
     axes = [np.linspace(c - h, c + h, n) for c, h, n in zip(env.cfg.zone.center, half, cfg.lattice[:2])]
     axes.append(np.linspace(*cfg.z_range, cfg.lattice[2]))
@@ -103,8 +114,10 @@ class Explorer:
         close = np.asarray(cfg.close)
         pinch, _, rot_home = hand_points(env, close)
         _, verts, _ = hand_points(env, cfg.grasp_pre * close)
-        rot = tilt_rotation(cfg.grasp_tilt) @ rot_home
+        rot, palm = tilt_rotation(cfg.grasp_tilt, rot_home) @ rot_home, palm_frame(rot_home)
         self.pinch_base = torch.tensor(rot @ pinch, dtype=torch.float32, device=dev)  # tcp -> pinch, tilted, base
+        as_base = lambda v: torch.tensor(palm @ np.asarray(v, float), dtype=torch.float32, device=dev)
+        self.aim_offset, self.grasp_shift = as_base([*cfg.aim_offset, 0.0]), as_base(cfg.grasp_shift)  # (3,), base
         self.grasp_z_min = env.table_z + 0.008 - float((verts @ rot.T)[:, 2].min())  # hand clears the table
         self.gen = torch.Generator(dev).manual_seed(seed)
         self.dt = env.cfg.timestep * env.cfg.substeps
@@ -160,10 +173,10 @@ class Explorer:
         self.aim = torch.where(mask & ~keep, aim, self.aim)
         aim_xy = env.sim.xpos[rows, env.obj_body[self.aim], :2]
         noise = (self._rand(2) * 2 - 1) * cfg.aim_noise
-        xy = torch.where(self._rand(1) < cfg.p_aim, aim_xy + torch.tensor(cfg.aim_offset, device=dev) + noise,
+        xy = torch.where(self._rand(1) < cfg.p_aim, aim_xy + self.aim_offset[:2] + noise,
                          center + (self._rand(2) * 2 - 1) * half)
         reach = half + cfg.lattice_margin
-        xy = torch.where(pull[:, None], aim_xy + torch.tensor(cfg.grasp_shift[:2], device=dev) - self.pinch_base[:2],
+        xy = torch.where(pull[:, None], aim_xy + self.grasp_shift[:2] - self.pinch_base[:2],
                          xy).clamp(center - reach, center + reach)
         z = torch.where(keep, env.sim.site_xpos[:, env.tcp_site, 2], torch.full((self.n,), cfg.hover_z, device=dev))
         self.goal = torch.where(mask[:, None], torch.cat([xy, z[:, None]], 1), self.goal)
@@ -217,7 +230,7 @@ class Explorer:
         """(N,) tcp height that puts the pinch point at the aimed object's centre + shift, hand clear of the floor."""
         env = self.env
         z_obj = env.sim.xpos[torch.arange(self.n, device=env.device), env.obj_body[self.aim], 2]
-        return (z_obj + self.cfg.grasp_shift[2] - self.pinch_base[2]).clamp(min=self.grasp_z_min)
+        return (z_obj + self.grasp_shift[2] - self.pinch_base[2]).clamp(min=self.grasp_z_min)
 
     def _update_goal_height(self, changed: torch.Tensor, tcp: torch.Tensor) -> None:
         """Per-phase tcp goal height: descend gradually (to contact, or to the planned grasp height), pull, rise."""

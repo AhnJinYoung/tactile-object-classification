@@ -12,26 +12,29 @@ _Updated after every change or finished experiment. Last update: 2026-11-28._
 
 ### Previous work done
 
-- **What:** The scene was rebuilt: no bin, an 80 x 180 cm table with the robot at the middle of a long edge, 3 to 8
-  objects scattered in the reachable 45 x 60 cm zone, and real YCB object meshes (21 objects, 16 for training and
-  5 held out) with measured masses, friction per material and per-world randomisation of mass, friction and centre of
-  mass. Success is lifting the target 10 cm and holding it 1 s; the reward is sparse by default. Merged in the same
-  step: the staged trainer, the multi-GPU launcher, the server preflight check, the live browser viewer and the
-  report page source.
-- **Why:** The task is searching a table, not a bin, and realistic object masses and contact parameters narrow the
-  gap to the real robot. The trainer and launcher are what the planned experiments run on.
-- **Results:** 100 unit tests pass on CPU. A scripted lift check on each object alone succeeded in 23 of 63 trials
-  with the official Sharpa finger gains and 15 of 63 with torque-limit gains; fingertip press force reaches 14 N at
-  moderate flexion, and the heaviest object (171 g) was held, so failures come from the fixed scripted grasp, not
-  from weak fingers. The scripted explorer has fingertip contact in 17 % of steps and almost never lifts an object
-  in clutter. Nothing has run on a GPU yet.
+- **What:** The hand now faces a long edge of the table: at home the fingers point down and the palm faces -x, away
+  from the robot (before: +y, along the table). Only wrist 3 turns (about -pi/2; the other joints move a little to
+  keep the tcp at the same point) and the hand mount stays as designed. The explorer and the lift check express
+  their hand-relative offsets and the palm-down tilt axis in a palm frame taken from the home pose, so `arm_home`
+  alone sets the palm direction. `arm_range` grew for shoulder lift, elbow and wrist 1 (1.0, 1.4, 1.4 -> 1.4, 2.0,
+  2.0 rad) so the tilted grasp pose reaches the zone.
+- **Why:** The user asked for the palm to face a long edge, if the real hardware allows it. It does: the Sharpa
+  flange (ISO 9409-1-50-4-M6 pattern with one locating-pin hole) fixes the hand's yaw on the UR tool flange, and
+  wrist 3 (+-360 deg) turns the whole hand. Palm towards the robot was tried first and rejected: the palm-down pull
+  pose is then out of reach for most of the zone (91 % of the tilted IK lattice with the old range).
+- **Results:** Scripted single-object lift check with the official Sharpa finger gains: 51 of 63 trials (before:
+  23 of 63; the larger range alone, palm along the table, still gives 23 of 63); palm towards the robot: 35 of 63.
+  Scripted explorer, 8 worlds x 300 steps on CPU: fingertip contact in 14.8 % of world-steps (palm along the table,
+  same measurement: 18.9 %), 1 wrong pick, no success. Unit tests: 101 of 102 pass on CPU; the preflight test
+  fails only because the disk has 3.6 GB free (its runs-directory check). Nothing has run on a GPU yet.
 
 ### Ongoing
 
-- **What:** Bringing the report page in line with the table scene, and getting access to the GPU servers.
-- **Why:** The page still described the bin. No training can start before a GPU is reachable and free.
-- **Predicted outcomes:** The page shows the new scene and still no results. Once a GPU is available: a preflight
-  check, then a smoke test of every stage, which is expected to surface GPU-only problems.
+- **What:** Waiting for a free GPU on the shared server. The isolated workspace there is ready: code, Python
+  environment and assets in one private directory, 82 unit tests passing on its CPU.
+- **Why:** No smoke test or training can start before a GPU is free and the run is approved.
+- **Predicted outcomes:** A preflight check, then a smoke test of every stage, which is expected to surface GPU-only
+  problems (memory per world, throughput, headless rendering).
 
 ### Future works
 

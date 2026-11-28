@@ -14,7 +14,7 @@ import numpy as np
 from omegaconf import OmegaConf
 
 from tacfind.envs.bin_env import REPO, plain
-from tacfind.envs.explorer import tilt_rotation
+from tacfind.envs.explorer import palm_frame, tilt_rotation
 from tacfind.envs.objects import build_library
 from tacfind.envs.scene import ARM_JOINTS, HAND, build_scene, hand_spec
 
@@ -49,9 +49,10 @@ class LiftTrial:
     """Scripted grasp-and-lift of one library object (arm by damped least-squares IK on the tcp site).
 
     The grasp is planned in the tcp frame: `close` defines the pinch point (mean of the thumb, index and middle pad
-    centres); the tcp is placed so that this point lands `pinch_dz` above the object's centre, but no lower than lets
-    the hand (in posture `pre`) clear the floor by `clearance`. `tilt` rotates the hand about the base x axis
-    (negative: the palm turns towards the floor), applied for the whole trial.
+    centres); the tcp is placed so that this point lands at the object's centre + `shift` (palm frame, see
+    `explorer.palm_frame`), but no lower than lets the hand (in posture `pre`) clear the table by `clearance`. `tilt`
+    rotates the hand about the horizontal axis across the palm (negative: the palm turns towards the table), applied
+    for the whole trial.
     """
 
     def __init__(self, cfg, obj):
@@ -114,10 +115,11 @@ class LiftTrial:
         quat = rng.normal(size=4) if rng.uniform() < 0.5 else np.array([1.0, 0, 0, 0])
         d.qpos[self.obj_q:self.obj_q + 7] = [*cfg.zone.center, top + 0.08, *(quat / np.linalg.norm(quat))]
         mujoco.mj_step(m, d, nstep=round(0.8 / cfg.timestep))
-        rot_goal = tilt_rotation(tilt) @ d.site_xmat[self.tcp].reshape(3, 3)
+        rot_home = d.site_xmat[self.tcp].reshape(3, 3).copy()
+        rot_goal = tilt_rotation(tilt, rot_home) @ rot_home
         pinch, _ = self.hand_points(close)
         _, verts = self.hand_points(pre)
-        low = d.xpos[self.obj_body] + np.asarray(shift) - rot_goal @ pinch  # pinch target = object centre + shift
+        low = d.xpos[self.obj_body] + palm_frame(rot_home) @ np.asarray(shift) - rot_goal @ pinch  # pinch target
         low[2] = max(low[2], top + clearance - (verts @ rot_goal.T)[:, 2].min())
         above, high = low + [0, 0, ex.hover_z - low[2]], low + [0, 0, ex.pull_z - low[2]]
         plan = [(1.5, above, pre), (1.5, low, pre), (1.0, low, close), (2.0, high, close), (cfg.hold_time, high, close)]
