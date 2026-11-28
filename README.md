@@ -8,25 +8,23 @@ Report page (results and interactive architecture): https://claude.ai/artifact/E
 
 ## Current state
 
-_Updated after every change or finished experiment. Last update: 2026-11-28._
+_Updated after every change or finished experiment. Last update: 2026-11-29._
 
 ### Previous work done
 
-- **What:** The hand now faces a long edge of the table: at home the fingers point down and the palm faces -x, away
-  from the robot (before: +y, along the table). Only wrist 3 turns (about -pi/2; the other joints move a little to
-  keep the tcp at the same point) and the hand mount stays as designed. The explorer and the lift check express
-  their hand-relative offsets and the palm-down tilt axis in a palm frame taken from the home pose, so `arm_home`
-  alone sets the palm direction. `arm_range` grew for shoulder lift, elbow and wrist 1 (1.0, 1.4, 1.4 -> 1.4, 2.0,
-  2.0 rad) so the tilted grasp pose reaches the zone.
-- **Why:** The user asked for the palm to face a long edge, if the real hardware allows it. It does: the Sharpa
-  flange (ISO 9409-1-50-4-M6 pattern with one locating-pin hole) fixes the hand's yaw on the UR tool flange, and
-  wrist 3 (+-360 deg) turns the whole hand. Palm towards the robot was tried first and rejected: the palm-down pull
-  pose is then out of reach for most of the zone (91 % of the tilted IK lattice with the old range).
-- **Results:** Scripted single-object lift check with the official Sharpa finger gains: 51 of 63 trials (before:
-  23 of 63; the larger range alone, palm along the table, still gives 23 of 63); palm towards the robot: 35 of 63.
-  Scripted explorer, 8 worlds x 300 steps on CPU: fingertip contact in 14.8 % of world-steps (palm along the table,
-  same measurement: 18.9 %), 1 wrong pick, no success. Unit tests: 101 of 102 pass on CPU; the preflight test
-  fails only because the disk has 3.6 GB free (its runs-directory check). Nothing has run on a GPU yet.
+- **What:** An "Objects" tab on the report page: one card per YCB object (training split first, then held out) with
+  four CPU renders (three-quarter, orthographic side and top, the flat-open Sharpa hand beside it from above), mass,
+  extents along the PCA axes of the target cloud and along the scan's own axes, height at rest, and warnings when
+  the object was still moving after settling or the scan dips below the table. Scale in every image: 1 cm grid paper
+  (bold every 5 cm) on the table and on a backdrop, plus a ruler of 1 cm segments. Renders are cached in
+  `runs/dev/objects/` by `tacfind/report/gallery.py` (`python scripts/report.py --objects`).
+- **Why:** The user wanted to check every object of the dataset by eye, with its size next to the hand.
+- **Results:** Flat-open hand on the model: thumb-to-index pad distance 12.4 cm, 23.4 cm long, 17.8 cm wide. The
+  convex collision hulls of the round objects sit inside the scans: at rest the scans of the baseball,
+  racquetball, pear, tennis ball and golf ball dip 4-5 mm below the table top (they rest that much lower than
+  they look). PCA extents overstate the size of objects without a dominant axis (Rubik's cube 8.2-9.4 cm by PCA,
+  5.8 cm along its scan axes; mug). Page size 250 KiB -> 2.0 MiB (84 embedded WebP images, 1.6 MB). Report tests
+  22/22 and Node tests 15/15 pass.
 
 ### Ongoing
 

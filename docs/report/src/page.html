@@ -1,4 +1,5 @@
 <title>Tactile Object Classification</title>
+<meta charset="utf-8">
 <meta name="claude:viewport-fit-sides" content="cover">
 <style>
 {{STYLE}}
@@ -8,17 +9,20 @@
     <div>
       <h1>Tactile Object Classification</h1>
       <p class="lede">A blind UR10e arm with a Sharpa Wave hand searches among objects on a table, finds by touch alone the
-        one that matches a target point cloud, and lifts it. This page collects the training runs and shows the networks.</p>
+        one that matches a target point cloud, and lifts it. This page collects the training runs and shows the networks and the
+        objects.</p>
     </div>
     <nav class="tabs" aria-label="Views">
       <a href="#results" id="tab-results">Results</a>
       <a href="#architecture" id="tab-architecture">Architecture</a>
+      <a href="#objects" id="tab-objects">Objects</a>
     </nav>
   </div>
 </header>
 <main class="wrap">
   <section id="view-results" aria-labelledby="tab-results"></section>
   <section id="view-architecture" aria-labelledby="tab-architecture" hidden></section>
+  <section id="view-objects" aria-labelledby="tab-objects" hidden></section>
 </main>
 <footer class="wrap foot" id="foot"></footer>
 <div class="tip" id="tip" role="status" hidden></div>

@@ -156,6 +156,17 @@ textarea.code { min-height: 12rem; resize: vertical; }
 .form { display: grid; grid-template-columns: max-content 1fr; gap: 0.4rem 0.6rem; align-items: center; }
 .form input { width: 100%; box-sizing: border-box; padding: 0.2rem 0.4rem; }
 .warn { color: var(--warn); }
+/* objects */
+.objgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 540px), 1fr)); gap: 1rem;
+  margin-top: 1rem; }
+.objcard { display: flex; flex-direction: column; gap: 0.5rem; }
+.objhead { display: flex; gap: 0.6rem; align-items: baseline; justify-content: space-between; }
+.objhead h3 { margin: 0; text-transform: capitalize; overflow-wrap: anywhere; }
+.sp-train { color: var(--good); } .sp-heldout { color: var(--warn); }
+.objviews { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
+.objviews img { width: 100%; height: auto; display: block; border-radius: 4px; border: 1px solid var(--line); }
+.objcard p.warn { margin: 0; font-size: 0.85rem; }
+@media (max-width: 380px) { .objviews { grid-template-columns: 1fr; } }
 @media (max-width: 640px) { h1 { font-size: 1.3rem; } .tabs a { padding: 0.5rem 0.6rem; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 .stagefig .c1 { fill: var(--s1); } .stagefig .c2 { fill: var(--s2); } .stagefig .c3 { fill: var(--s3); }

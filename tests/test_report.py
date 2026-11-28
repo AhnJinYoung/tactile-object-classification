@@ -7,13 +7,14 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 from omegaconf import OmegaConf
 
 from tacfind.networks.model import TacFind
 from tacfind.report.configs import CONFIGS, compose_preset, config_sources
-from tacfind.report.page import build
+from tacfind.report.page import build, object_gallery
 from tacfind.report.runs import downsample, parse_overrides
 from tacfind.report.specs import active_modules, expand_steps, load_specs, shape_numbers, symbol_values
 from tacfind.spec import EnvSpec
@@ -153,7 +154,7 @@ def test_build_with_fake_runs(tmp_path):
 def test_empty_state_has_no_numbers(tmp_path):
     (tmp_path / "runs").mkdir()
     page, data, copied = build(tmp_path / "runs", tmp_path / "build", tmp_path / "missing.yaml")
-    assert data["runs"] == [] and data["envCheck"] is None and copied == {}
+    assert data["runs"] == [] and data["envCheck"] is None and data["gallery"] is None and copied == {}
     assert len(data["planned"]) == len(PRESETS) and data["planned"][0]["status"] == "planned"
     assert "No training runs yet." in page.read_text()
 
@@ -168,3 +169,24 @@ def test_parse_overrides():
     assert parse_overrides(["+experiment=E007_history_10", "matcher=latent", "train.stages.joint.lr=1e-4",
                             "hydra.verbose=true"], {"matcher"}) == ("E007_history_10", {"matcher": "latent"},
                                                                     {"train.stages.joint.lr": 1e-4})
+
+
+def test_object_gallery_inlines_the_cached_images(tmp_path):
+    cache = tmp_path / "objects"
+    cache.mkdir()
+    objects = [{"name": "plum", "split": "heldout"}, {"name": "lemon", "split": "train"}]
+    (cache / "objects.json").write_text(json.dumps({"views": ["top", "hand"], "objects": objects}))
+    (cache / "plum_top.webp").write_bytes(b"RIFF")
+    gallery = object_gallery(cache)
+    plum, lemon = gallery["objects"]
+    assert plum["images"] == {"top": "data:image/webp;base64,UklGRg=="} and lemon["images"] == {}
+    assert object_gallery(tmp_path / "missing") is None
+
+
+def test_pca_extents_of_a_rotated_box():
+    from tacfind.report.gallery import pca_extents
+
+    box = np.mgrid[-1:1:11j, -1:1:11j, -1:1:11j].reshape(3, -1).T * [0.01, 0.03, 0.05]  # 2 x 6 x 10 cm lattice
+    angle = 0.6
+    rot = np.array([[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [0, 0, 1]])
+    assert np.allclose(pca_extents(box @ rot.T, box @ rot.T), [0.02, 0.06, 0.10])

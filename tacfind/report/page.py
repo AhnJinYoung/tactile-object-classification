@@ -13,10 +13,12 @@ from tacfind.report.runs import collect_runs, load_notes, planned
 from tacfind.report.specs import load_specs
 
 SRC = REPO / "docs" / "report" / "src"
-SCRIPTS = ("symbols.js", "compose.js", "charts.js", "diagram.js", "scene.js", "results.js", "arch.js", "app.js")  # load order
+SCRIPTS = ("symbols.js", "compose.js", "charts.js", "diagram.js", "scene.js", "results.js", "arch.js", "gallery.js",
+           "app.js")  # load order
 ROBOT_FRAME = "table_sanity_150.png"  # a rendered frame of our scene: arm, hand and objects on the table
 ENV_VIDEO = "table_sanity.mp4"  # scripted explorer, no learning (environment check)
 YCB_FILE = REPO / "tacfind" / "envs" / "ycb.py"
+GALLERY = "objects"  # runs/dev/objects/: written by tacfind/report/gallery.py (scripts/report.py --objects)
 
 
 def page_data(runs_dir: Path, notes_path: Path, configs: Path = CONFIGS) -> dict:
@@ -29,7 +31,7 @@ def page_data(runs_dir: Path, notes_path: Path, configs: Path = CONFIGS) -> dict
         "generated": date.today().isoformat(),
         "runs": runs, "planned": planned(sources, runs, notes), "config": sources, "specs": load_specs(),
         "envCheck": {"video": f"videos/dev/{ENV_VIDEO}"} if (dev / ENV_VIDEO).is_file() else None,
-        "ycb": ycb_objects(),
+        "ycb": ycb_objects(), "gallery": object_gallery(dev / GALLERY),
         "robotImage": f"data:image/png;base64,{base64.b64encode(frame.read_bytes()).decode()}" if frame else None,
     }
 
@@ -41,6 +43,19 @@ def ycb_objects(path: Path = YCB_FILE) -> dict:
         if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "OBJECTS" for t in node.targets):
             return {k: list(v) for k, v in ast.literal_eval(node.value).items()}
     return {}
+
+
+def object_gallery(cache: Path) -> dict | None:
+    """The rendered object gallery (objects.json of `tacfind.report.gallery`) with each object's images inlined as
+    data URIs under `images` ({view: uri}); None when it has not been rendered."""
+    if not (cache / "objects.json").is_file():
+        return None
+    gallery = json.loads((cache / "objects.json").read_text())
+    for obj in gallery["objects"]:
+        files = {view: cache / f"{obj['name']}_{view}.webp" for view in gallery["views"]}
+        obj["images"] = {view: f"data:image/webp;base64,{base64.b64encode(f.read_bytes()).decode()}"
+                         for view, f in files.items() if f.is_file()}
+    return gallery
 
 
 def videos_to_copy(data: dict, runs_dir: Path) -> dict[str, Path]:
