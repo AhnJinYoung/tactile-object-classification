@@ -1,6 +1,7 @@
 """Builds the report page: collects runs, configs and module specs into one JSON blob and inlines it, the stylesheet
 and the scripts of `docs/report/src/` into a single HTML file (opens offline; videos sit next to it)."""
 
+import ast
 import base64
 import json
 import shutil
@@ -12,8 +13,10 @@ from tacfind.report.runs import collect_runs, load_notes, planned
 from tacfind.report.specs import load_specs
 
 SRC = REPO / "docs" / "report" / "src"
-SCRIPTS = ("symbols.js", "compose.js", "charts.js", "diagram.js", "results.js", "arch.js", "app.js")  # load order
-ROBOT_FRAME = "env_sanity_085.png"  # a rendered frame of our scene: hand in the bin, objects visible
+SCRIPTS = ("symbols.js", "compose.js", "charts.js", "diagram.js", "scene.js", "results.js", "arch.js", "app.js")  # load order
+ROBOT_FRAME = "table_sanity_150.png"  # a rendered frame of our scene: arm, hand and objects on the table
+ENV_VIDEO = "table_sanity.mp4"  # scripted explorer, no learning (environment check)
+YCB_FILE = REPO / "tacfind" / "envs" / "ycb.py"
 
 
 def page_data(runs_dir: Path, notes_path: Path, configs: Path = CONFIGS) -> dict:
@@ -21,13 +24,23 @@ def page_data(runs_dir: Path, notes_path: Path, configs: Path = CONFIGS) -> dict
     sources, notes = config_sources(configs), load_notes(notes_path)
     runs = collect_runs(runs_dir, sources, notes)
     dev = runs_dir / "dev"
-    frame = dev / ROBOT_FRAME if (dev / ROBOT_FRAME).is_file() else next(iter(sorted(dev.glob("env_sanity_*.png"))), None)
+    frame = dev / ROBOT_FRAME if (dev / ROBOT_FRAME).is_file() else next(iter(sorted(dev.glob("table_sanity_*.png"))), None)
     return {
         "generated": date.today().isoformat(),
         "runs": runs, "planned": planned(sources, runs, notes), "config": sources, "specs": load_specs(),
-        "envCheck": {"video": "videos/dev/env_sanity.mp4"} if (dev / "env_sanity.mp4").is_file() else None,
+        "envCheck": {"video": f"videos/dev/{ENV_VIDEO}"} if (dev / ENV_VIDEO).is_file() else None,
+        "ycb": ycb_objects(),
         "robotImage": f"data:image/png;base64,{base64.b64encode(frame.read_bytes()).decode()}" if frame else None,
     }
+
+
+def ycb_objects(path: Path = YCB_FILE) -> dict:
+    """{name: [mass kg, material, split]} of the YCB library, read from the source of `tacfind.envs.ycb` without
+    importing it (that would load the simulator)."""
+    for node in ast.parse(path.read_text()).body:
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "OBJECTS" for t in node.targets):
+            return {k: list(v) for k, v in ast.literal_eval(node.value).items()}
+    return {}
 
 
 def videos_to_copy(data: dict, runs_dir: Path) -> dict[str, Path]:
@@ -35,7 +48,7 @@ def videos_to_copy(data: dict, runs_dir: Path) -> dict[str, Path]:
     out = {f"videos/{r['id']}/{v['file']}": runs_dir / r["id"] / "videos" / v["file"] for r in data["runs"]
            for v in r["videos"]}
     if data["envCheck"]:
-        out[data["envCheck"]["video"]] = runs_dir / "dev" / "env_sanity.mp4"
+        out[data["envCheck"]["video"]] = runs_dir / "dev" / ENV_VIDEO
     return out
 
 

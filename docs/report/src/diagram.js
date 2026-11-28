@@ -149,7 +149,7 @@
     } else {
       parts.push(`<rect x="1240" y="342" width="240" height="180" rx="6" class="box"/>`, txt(1360, 436, 'no rendered frame available', 'ts', 'text-anchor="middle"'));
     }
-    parts.push(txt(1240, 538, 'UR10e + Sharpa Wave over the occluded bin', 't'), txt(1240, 552, 'frame of our simulation (scripted explorer)', 'ts'));
+    parts.push(txt(1240, 538, 'UR10e + Sharpa Wave over the table', 't'), txt(1240, 552, 'frame of our simulation (scripted explorer)', 'ts'));
     // confidence over an episode (schematic)
     parts.push(txt(1240, 584, 'confidence over one episode (schematic)', 'ts'));
     const bar = (y, segs) => { let x = 1262; return segs.map(([w, c]) => { const r = `<rect x="${x}" y="${y}" width="${w}" height="12" class="${c}"/>`; x += w; return r; }).join(''); };

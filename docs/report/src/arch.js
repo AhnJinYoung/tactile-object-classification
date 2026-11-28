@@ -260,8 +260,8 @@
     if (id === 'touchpts' || id === 'target' || id === 'sim') {
       const text = {
         touchpts: [`Tactile point cloud: (B, L=${sym.L}, 8)`, `Every fingertip contact of the last H = ${sym.H} steps (5 fingertips per step): contact point in the robot base frame (m), outward normal of the touched surface, force magnitude (N) and age in [0, 1] (0 = now). Contacts weaker than ${cfg.env.force_threshold} N read as no contact. The points matcher keeps T = ${sym.T ?? '-'} of them; with latent_head they are only the Chamfer target.`],
-        target: [`Target point cloud: (B, N=${sym.N}, 6)`, `${sym.N} surface points of the target object with outward normals, in the object frame. The library has ${cfg.env.objects.n_objects} objects of ${cfg.env.objects.families.length} families; the trainer encodes the whole library once per update.`],
-        sim: ['Simulator ground truth', `Only available in simulation: the confidence label c_t (${cfg.env.label}), the library id of the touched object (contrastive target), the reward, and the privileged state s_priv (P = ${sym.P}: per object position, 6-D rotation and target flag) that only the critic sees. ${cfg.n_envs} worlds run batched on one GPU.`],
+        target: [`Target point cloud: (B, N=${sym.N}, 6)`, `${sym.N} surface points of the target object with outward normals, in the object frame, sampled from its mesh. The trainer encodes every object of the training split once per update (contrastive library). ${root.TF.scene.sceneFacts(cfg.env, D.ycb).find((r) => r[0] === 'Library')[1]}`],
+        sim: ['Simulator ground truth', `Only available in simulation: the confidence label c_t (${cfg.env.label}), the library id of the touched object (contrastive target), the reward, and the privileged state s_priv (P = ${sym.P} = 10 values per object slot × ${cfg.env.n_slots} slots: position relative to the tcp, 6-D rotation and target flag, zero for empty slots) that only the critic sees. ${cfg.n_envs} worlds run batched on one GPU.`],
       }[id];
       box.append(h('h3', {}, text[0]), h('p', {}, text[1]));
       return box;
@@ -370,8 +370,11 @@
       explorer: !!(S.stage && d.stages[S.stage].actor === 'explorer'), robotImage: D.robotImage, obsRows: obsRows(d.cfg) });
     fig.append(...cards(d, losses, trained));
     const figbox = h('div', { class: 'figbox', id: 'figbox' }, h('div', { id: 'figsizer', style: 'position:relative;overflow:hidden' }, fig));
+    const scene = h('dl', { class: 'kv' }, root.TF.scene.sceneFacts(d.cfg.env, D.ycb).flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
     view.replaceChildren(h('h2', {}, 'Architecture'), toolbar(d), figbox,
       h('p', { class: 'muted' }, 'Click a block for its inputs, outputs and computation. Values in the blocks are editable; the export below collects the changes.'),
+      h('div', { class: 'panel', id: 'scene' }, h('h3', {}, 'Scene and objects'),
+        h('p', { class: 'muted' }, 'From the env config of the selected experiment (configs/env/bin.yaml) and the YCB list in tacfind/envs/ycb.py.'), scene),
       h('div', { class: 'grid2' }, detail(d), exportPanel(d)));
     fitFigure();
     if (focus) doc.getElementById(focus)?.focus();

@@ -127,7 +127,7 @@ def test_build_with_fake_runs(tmp_path):
     done = write_run(runs, "E003_matcher_latent", [("contrastive", 400), ("confidence", 50), ("policy_ppo", 20)], "done")
     write_run(runs, "live", [("contrastive", 7)], "running", partial=True)
     (runs / "dev").mkdir()
-    (runs / "dev" / "env_sanity.mp4").write_bytes(b"video")
+    (runs / "dev" / "table_sanity.mp4").write_bytes(b"video")
     notes = tmp_path / "notes.yaml"
     notes.write_text("E003_matcher_latent: Learns slower than the baseline.\n")
     page, data, copied = build(runs, tmp_path / "build", notes)
@@ -144,7 +144,7 @@ def test_build_with_fake_runs(tmp_path):
     assert len(live["curves"]["step"]) == 7  # the partly written line is skipped
     assert "E003_matcher_latent" not in {p["id"] for p in data["planned"]}
     assert (tmp_path / "build" / f"videos/{done.name}/contrastive_00399.mp4").read_bytes() == b"new"
-    assert "videos/dev/env_sanity.mp4" in copied
+    assert "videos/dev/table_sanity.mp4" in copied
     html = page.read_text()
     assert html.startswith("<title>Tactile Object Classification</title>") and "{{" not in html.split("<script")[0]
     assert "/home/someone" not in html and str(tmp_path) not in html

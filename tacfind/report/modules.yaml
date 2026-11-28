@@ -14,7 +14,8 @@ symbols:
   H:   {expr: history, means: history length in control steps (20 Hz)}
   D_o: {expr: 192, means: values per observation o_t (sum of the observation groups)}
   A:   {expr: 28, means: action size (6 arm + 22 hand joint-target increments)}
-  P:   {expr: 10 * env.n_slots, means: "privileged state for the critic: per object 3 position + 6 rotation + 1 target flag"}
+  P:   {expr: 10 * env.n_slots, means: "privileged state for the critic: per object slot (env.n_slots, empty slots zero)
+    3 position relative to the tcp + 6-D rotation + 1 target flag"}
   N:   {expr: env.objects.n_points, means: points of the target point cloud}
   dim: {expr: dim, means: shared latent width (z_touch, tokens, z_target, z_diff)}
   G:   {expr: attn_groups, means: vector-attention weight groups (dim / G channels share one weight)}
